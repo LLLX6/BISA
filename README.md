@@ -44,7 +44,11 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080).
 Local demo accounts exist only when `BISA_SEED_SAMPLE_DATA=true`:
 
 - Shopper: `96890000001` / `1234`
-- Merchant: `96890000002` / `1234`
+- Merchant (Mawaleh Daily): `96892000003` / `1234`
+
+The complete sample catalog contains 6 tagged demo stores across Muscat's wilayats, 24 products, 6 bundles and 6 advertisements. An authorized administrator can remove all tagged demo records from **BISA Admin → Demo data** by entering the exact confirmation phrase shown in the interface. Real records are not selected by that operation.
+
+The public phone showcase is deployed from `public/` to GitHub Pages. It demonstrates discovery, area filters, a one-store cart and the admin preview without pretending to submit a real order; transactional ordering requires the Python server.
 
 Never enable sample seed against production storage.
 

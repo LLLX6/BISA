@@ -35,7 +35,7 @@ class BisaDomainTests(unittest.TestCase):
         init_db()
         self.service = BisaService()
         self.shopper = authenticate(register_or_login("96890000001", "1234", "Shopper", "shopper")["token"])
-        self.merchant = authenticate(register_or_login("96890000002", "1234", "", "merchant_owner")["token"])
+        self.merchant = authenticate(register_or_login("96892000003", "1234", "", "merchant_owner")["token"])
 
     def assertCode(self, code, callback):
         with self.assertRaises(DomainError) as caught:
@@ -53,33 +53,33 @@ class BisaDomainTests(unittest.TestCase):
             con.execute("INSERT INTO locations VALUES('area_hidden','wilayat_seeb','area','مخفية','Hidden',2,1,datetime('now'))")
         locations = self.service.public_bootstrap()["locations"]
         ids = {row["id"] for row in locations}
-        self.assertIn("area_mawaleh", ids)
+        self.assertIn("demo_area_seeb", ids)
         self.assertNotIn("area_hidden", ids)
 
     def test_bundle_total_may_exceed_two_omr_but_components_may_not(self):
         result = self.service.create_bundle(self.merchant, {
-            "branchId": "branch_demo", "titleAr": "باقة اكتشاف", "titleEn": "Discovery bundle",
+            "branchId": "demo_branch_seeb", "titleAr": "باقة اكتشاف", "titleEn": "Discovery bundle",
             "price": "3.500", "components": [
-                {"productId": "prod_cups", "quantity": 4},
-                {"productId": "prod_notebook", "quantity": 4},
+                {"productId": "demo_product_seeb_1", "quantity": 4},
+                {"productId": "demo_product_seeb_2", "quantity": 4},
             ],
         })
         self.assertEqual(result["price"], "3.500")
         with self.assertRaises(sqlite3.IntegrityError):
             with connect(immediate=True) as con:
-                con.execute("UPDATE products SET price_baisa=2001 WHERE id='prod_cups'")
+                con.execute("UPDATE products SET price_baisa=2001 WHERE id='demo_product_seeb_1'")
         with connect() as con:
             invalid = con.execute("SELECT COUNT(*) n FROM products WHERE price_baisa<100 OR price_baisa>2000").fetchone()["n"]
         self.assertEqual(invalid, 0)
 
     def test_single_store_cart_requires_explicit_replace(self):
-        first = self.service.add_cart(self.shopper, {"kind":"product","itemId":"prod_clean","branchId":"branch_demo","quantity":1})
-        self.assertEqual(first["merchant_id"], "merchant_demo")
+        first = self.service.add_cart(self.shopper, {"kind":"product","itemId":"demo_product_seeb_1","branchId":"demo_branch_seeb","quantity":1})
+        self.assertEqual(first["merchant_id"], "demo_merchant_seeb")
         with connect(immediate=True) as con:
             stamp = "2026-01-01T00:00:00+00:00"
             con.execute("INSERT INTO accounts VALUES('acct_second','96890000003','Second','hash','active',?)", (stamp,))
             con.execute("INSERT INTO merchants(id,owner_account_id,name_ar,name_en,status,created_at,updated_at) VALUES('merchant_second','acct_second','متجر ثان','Second Store','approved',?,?)", (stamp,stamp))
-            con.execute("INSERT INTO store_branches(id,merchant_id,name_ar,name_en,wilayah_id,area_id,status,active,public_visible,created_at,updated_at) VALUES('branch_second','merchant_second','ثان','Second','wilayat_seeb','area_mawaleh','approved',1,1,?,?)", (stamp,stamp))
+            con.execute("INSERT INTO store_branches(id,merchant_id,name_ar,name_en,wilayah_id,area_id,status,active,public_visible,created_at,updated_at) VALUES('branch_second','merchant_second','ثان','Second','wilayat_seeb','demo_area_seeb','approved',1,1,?,?)", (stamp,stamp))
             con.execute("INSERT INTO products(id,merchant_id,category_id,name_ar,name_en,price_baisa,status,active,created_at,updated_at) VALUES('prod_second','merchant_second','toys','لعبة','Toy',100,'approved',1,?,?)", (stamp,stamp))
             con.execute("INSERT INTO product_branch_inventory VALUES('prod_second','branch_second','tracked',5,'in_stock',?,'',1,?)", (stamp,stamp))
         payload={"kind":"product","itemId":"prod_second","branchId":"branch_second","quantity":1}
@@ -89,7 +89,7 @@ class BisaDomainTests(unittest.TestCase):
         self.assertEqual(len(replaced["items"]),1)
 
     def test_checkout_is_idempotent_and_payment_is_not_faked(self):
-        self.service.add_cart(self.shopper,{"kind":"product","itemId":"prod_clean","branchId":"branch_demo","quantity":2})
+        self.service.add_cart(self.shopper,{"kind":"product","itemId":"demo_product_seeb_1","branchId":"demo_branch_seeb","quantity":2})
         payload={"idempotencyKey":"checkout-one","fulfillmentMode":"pickup"}
         first=self.service.checkout(self.shopper,payload)
         second=self.service.checkout(self.shopper,payload)
@@ -101,7 +101,7 @@ class BisaDomainTests(unittest.TestCase):
             self.assertEqual(con.execute("SELECT COUNT(*) n FROM orders").fetchone()["n"],1)
 
     def test_concurrent_order_accept_decrements_stock_once(self):
-        self.service.add_cart(self.shopper,{"kind":"product","itemId":"prod_clean","branchId":"branch_demo","quantity":2})
+        self.service.add_cart(self.shopper,{"kind":"product","itemId":"demo_product_seeb_1","branchId":"demo_branch_seeb","quantity":2})
         order_id=self.service.checkout(self.shopper,{"idempotencyKey":"race-one","fulfillmentMode":"pickup"})["order"]["id"]
         barrier=threading.Barrier(2); results=[]
         def decide():
@@ -111,13 +111,13 @@ class BisaDomainTests(unittest.TestCase):
         for worker in workers: worker.join()
         self.assertEqual({result["status"] for result in results},{"accepted"})
         with connect() as con:
-            quantity=con.execute("SELECT quantity FROM product_branch_inventory WHERE product_id='prod_clean' AND branch_id='branch_demo'").fetchone()["quantity"]
+            quantity=con.execute("SELECT quantity FROM product_branch_inventory WHERE product_id='demo_product_seeb_1' AND branch_id='demo_branch_seeb'").fetchone()["quantity"]
             self.assertEqual(quantity,23)
 
     def test_competing_checkouts_cannot_over_reserve_stock(self):
         second=authenticate(register_or_login("96894444444","1234","Second shopper","shopper")["token"])
-        self.service.add_cart(self.shopper,{"kind":"product","itemId":"prod_clean","branchId":"branch_demo","quantity":20})
-        self.service.add_cart(second,{"kind":"product","itemId":"prod_clean","branchId":"branch_demo","quantity":20})
+        self.service.add_cart(self.shopper,{"kind":"product","itemId":"demo_product_seeb_1","branchId":"demo_branch_seeb","quantity":20})
+        self.service.add_cart(second,{"kind":"product","itemId":"demo_product_seeb_1","branchId":"demo_branch_seeb","quantity":20})
         barrier=threading.Barrier(2); results=[]
         def checkout(actor,key):
             barrier.wait()
@@ -133,8 +133,8 @@ class BisaDomainTests(unittest.TestCase):
 
     def test_merchant_plan_product_limit_is_enforced(self):
         with connect(immediate=True) as con:
-            con.execute("UPDATE subscription_plans SET entitlements=? WHERE id='advanced_3m'", ('{"products":6,"branches":5,"staff":6,"bundles":25}',))
-        payload={"branchId":"branch_demo","categoryId":"toys","nameAr":"منتج إضافي","nameEn":"Extra","price":"0.100","quantity":1}
+            con.execute("UPDATE subscription_plans SET entitlements=? WHERE id='advanced_3m'", ('{"products":4,"branches":5,"staff":6,"bundles":25}',))
+        payload={"branchId":"demo_branch_seeb","categoryId":"toys","nameAr":"منتج إضافي","nameEn":"Extra","price":"0.100","quantity":1}
         self.assertCode("plan_product_limit",lambda:self.service.upsert_product(self.merchant,payload))
 
     def test_supplier_hub_is_merchant_only(self):
@@ -143,7 +143,7 @@ class BisaDomainTests(unittest.TestCase):
 
     def test_merchant_application_stays_private_and_whatsapp_is_honest(self):
         new_actor=authenticate(register_or_login("96891111111","1234","New owner","shopper")["token"])
-        result=self.service.merchant_apply(new_actor,{"nameAr":"متجر جديد","nameEn":"New Store","wilayahId":"wilayat_seeb","areaId":"area_mawaleh"})
+        result=self.service.merchant_apply(new_actor,{"nameAr":"متجر جديد","nameEn":"New Store","wilayahId":"wilayat_seeb","areaId":"demo_area_seeb"})
         self.assertFalse(result["whatsappSent"])
         public_ids={store["merchant_id"] for store in self.service.public_bootstrap()["stores"]}
         self.assertNotIn(result["merchantId"],public_ids)
@@ -151,7 +151,7 @@ class BisaDomainTests(unittest.TestCase):
     def test_admin_approval_activates_trial_and_merchant_role_atomically(self):
         new_phone="96892222222"
         new_actor=authenticate(register_or_login(new_phone,"1234","Approved owner","shopper")["token"])
-        application=self.service.merchant_apply(new_actor,{"nameAr":"متجر يعتمد","nameEn":"Approved Store","wilayahId":"wilayat_seeb","areaId":"area_mawaleh"})
+        application=self.service.merchant_apply(new_actor,{"nameAr":"متجر يعتمد","nameEn":"Approved Store","wilayahId":"wilayat_seeb","areaId":"demo_area_seeb"})
         with connect(immediate=True) as con:
             admin_id="acct_admin_test"
             con.execute("INSERT INTO accounts VALUES(?,?,?,?,?,?)",(admin_id,"96893333333","Admin","hash","active","2026-01-01T00:00:00+00:00"))
@@ -163,6 +163,38 @@ class BisaDomainTests(unittest.TestCase):
         dashboard=self.service.merchant_dashboard(authenticate(merchant_login["token"]))
         self.assertEqual(dashboard["plan"]["id"],"early_trial")
         self.assertEqual(dashboard["merchant"]["status"],"approved")
+
+    def test_demo_catalog_covers_every_muscat_wilayat(self):
+        bootstrap = self.service.public_bootstrap()
+        self.assertEqual(len(bootstrap["stores"]), 6)
+        self.assertEqual(len(bootstrap["products"]), 24)
+        self.assertEqual(len(bootstrap["bundles"]), 6)
+        self.assertEqual(len(bootstrap["advertisements"]), 6)
+        areas = {row["area_id"] for row in bootstrap["stores"]}
+        self.assertEqual(areas, {
+            "demo_area_muscat", "demo_area_muttrah", "demo_area_bawshar",
+            "demo_area_seeb", "demo_area_al_amerat", "demo_area_qurayyat",
+        })
+        self.assertTrue(bootstrap["demoMode"])
+        self.assertEqual(bootstrap["demoCounts"]["product"], 24)
+
+    def test_admin_can_purge_only_tagged_demo_data_with_exact_confirmation(self):
+        with connect(immediate=True) as con:
+            stamp = "2026-01-01T00:00:00+00:00"
+            con.execute("INSERT INTO accounts VALUES(?,?,?,?,?,?)",("acct_demo_purge_admin","96898888888","Purge Admin","hash","active",stamp))
+            con.execute("INSERT INTO account_roles VALUES(?,?, '',1)",("acct_demo_purge_admin","admin"))
+        admin={"accountId":"acct_demo_purge_admin","role":"admin","merchantId":"","name":"Purge Admin"}
+        self.assertCode("demo_delete_confirmation_required",lambda:self.service.purge_demo_data(admin,"DELETE DEMO"))
+        result=self.service.purge_demo_data(admin,"DELETE BISA DEMO")
+        self.assertFalse(result["duplicate"])
+        self.assertGreater(result["deleted"], 0)
+        bootstrap=self.service.public_bootstrap()
+        self.assertEqual((bootstrap["stores"],bootstrap["products"],bootstrap["bundles"],bootstrap["advertisements"]),([],[],[],[]))
+        with connect() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) n FROM demo_records").fetchone()["n"],0)
+            self.assertEqual(con.execute("SELECT COUNT(*) n FROM accounts WHERE id='acct_demo_purge_admin'").fetchone()["n"],1)
+            self.assertEqual(con.execute("SELECT COUNT(*) n FROM admin_audit_logs WHERE action='demo_data_purged'").fetchone()["n"],1)
+        self.assertTrue(self.service.purge_demo_data(admin,"DELETE BISA DEMO")["duplicate"])
 
 
 if __name__ == "__main__":

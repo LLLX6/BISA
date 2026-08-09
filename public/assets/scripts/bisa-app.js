@@ -3,8 +3,9 @@
 
   const STORAGE = {
     token: 'bisa.auth.token.v1', account: 'bisa.auth.account.v1', language: 'bisa.language.v1',
-    location: 'bisa.location.v1', cartIntent: 'bisa.cart.intent.v1'
+    location: 'bisa.location.v1', cartIntent: 'bisa.cart.intent.v1', demoPurged: 'bisa.demo.purged.v1'
   };
+  const STATIC_SHOWCASE = location.hostname.endsWith('github.io');
   const API = location.protocol === 'file:' ? 'http://127.0.0.1:8080' : '';
   const state = {
     lang: localStorage.getItem(STORAGE.language) || 'ar',
@@ -12,7 +13,7 @@
     account: parse(localStorage.getItem(STORAGE.account), null),
     location: parse(localStorage.getItem(STORAGE.location), {id:'muscat_governorate', name_ar:'مسقط', name_en:'Muscat'}),
     view: new URLSearchParams(location.search).get('view') || 'home', merchantView: 'today',
-    bootstrap: {products:[],stores:[],categories:[],locations:[],cart:null,notifications:[],orders:[]},
+    bootstrap: {products:[],stores:[],bundles:[],advertisements:[],categories:[],locations:[],cart:null,notifications:[],orders:[]},
     dashboard: null, filters: {query:'',category:'',display:'list'}, loading: true
   };
   const $ = (selector, root=document) => root.querySelector(selector);
@@ -22,6 +23,39 @@
   const fmt = value => `${Number(value || 0).toFixed(3)} ${t('ر.ع','OMR')}`;
   const productEmoji = id => ({storage:'🧺',kitchen:'🥤',snacks:'🥜',stationery:'📒',cleaning:'🧽',toys:'🪁',decor:'🪴',party:'🎉',accessories:'👜',personal:'🧴',car:'🚗',seasonal:'✨'})[id] || '✦';
   function parse(value, fallback){ try { return value ? JSON.parse(value) : fallback; } catch { return fallback; } }
+
+  function demoBootstrap(){
+    const regions=[
+      ['muscat','مركز مسقط','Muscat Centre','لمسات الميناء','Harbour Finds','🪴'],
+      ['muttrah','مركز مطرح','Muttrah Centre','لقطات السوق','Souq Pop','🛍️'],
+      ['bawshar','الخوير','Al Khuwair','بيت بيسا','BISA Home','🏠'],
+      ['seeb','الموالح','Al Mawaleh','يوميات الموالح','Mawaleh Daily','✨'],
+      ['al_amerat','مركز العامرات','Al Amerat Centre','لمعة العامرات','Amerat Spark','🎁'],
+      ['qurayyat','مركز قريات','Qurayyat Centre','اختيارات الساحل','Coast Picks','🌊']
+    ];
+    const categoryRows=[['storage','التخزين والتنظيم','Storage & Organization','🧺'],['kitchen','أدوات المطبخ','Kitchen','🍳'],['stationery','قرطاسية','Stationery','✏️'],['cleaning','التنظيف','Cleaning','🧽'],['snacks','مكسرات وسناكس','Snacks & Nuts','🥜'],['party','مستلزمات الحفلات','Party','🎉']];
+    const templates=[['storage','منظم يومي','Daily organizer','1.300'],['kitchen','أكواب ملوّنة','Color cups','0.500'],['stationery','دفتر جيب','Pocket notebook','0.250'],['cleaning','إسفنجة عملية','Handy sponge','0.100'],['snacks','مكسرات مختارة','Selected nuts','1.900'],['party','زينة صغيرة','Mini party decor','2.000']];
+    const locations=[{id:'muscat_governorate',parent_id:'oman',kind:'governorate',name_ar:'محافظة مسقط',name_en:'Muscat Governorate'}];
+    const stores=[],products=[],bundles=[],advertisements=[];
+    regions.forEach((region,index)=>{
+      const [key,areaAr,areaEn,storeAr,storeEn,icon]=region; const areaId=`demo_area_${key}`,branchId=`demo_branch_${key}`,merchantId=`demo_merchant_${key}`;
+      locations.push({id:`wilayat_${key}`,parent_id:'muscat_governorate',kind:'wilayat',name_ar:areaAr.replace('مركز ',''),name_en:areaEn.replace(' Centre','')});
+      locations.push({id:areaId,parent_id:`wilayat_${key}`,kind:'area',name_ar:areaAr,name_en:areaEn});
+      stores.push({merchant_id:merchantId,name_ar:storeAr,name_en:storeEn,verified:1,branch_id:branchId,branch_name_ar:`فرع ${areaAr}`,branch_name_en:`${areaEn} Branch`,area_id:areaId,address_text:areaAr,pickup_enabled:1,office_enabled:1,home_enabled:1,product_count:4});
+      for(let n=0;n<4;n++){const [category,nameAr,nameEn,price]=templates[(index+n)%templates.length];products.push({id:`demo_product_${key}_${n+1}`,merchant_id:merchantId,category_id:category,name_ar:nameAr,name_en:nameEn,description_ar:`${icon} اكتشاف تجريبي في ${areaAr}`,description_en:`${icon} Demo discovery in ${areaEn}`,price,merchant_name_ar:storeAr,merchant_name_en:storeEn,verified:1,branch_id:branchId,branch_name_ar:`فرع ${areaAr}`,branch_name_en:`${areaEn} Branch`,area_id:areaId,quantity:25,availability:'in_stock',images:[]});}
+      bundles.push({id:`demo_bundle_${key}`,merchant_id:merchantId,branch_id:branchId,title_ar:`باقة ${areaAr}`,title_en:`${areaEn} Bundle`,description:'باقة تجريبية مختارة',price:'3.100',normalValue:'3.300',merchant_name_ar:storeAr,merchant_name_en:storeEn,verified:1,area_id:areaId,component_count:3});
+      advertisements.push({id:`demo_ad_${key}`,owner_id:merchantId,landing_id:branchId,area_id:areaId,label_ar:'إعلان تجريبي',label_en:'Demo sponsored',creative:{areaId,titleAr:`اكتشف ${storeAr}`,titleEn:`Discover ${storeEn}`,bodyAr:`اختيارات اليوم في ${areaAr}`,bodyEn:`Today's picks in ${areaEn}`,icon}});
+    });
+    const purged=localStorage.getItem(STORAGE.demoPurged)==='true';
+    return {ok:true,demoMode:true,demoCounts:purged?{}:{merchant:6,product:24,bundle:6,ad:6,area:6},locations:purged?locations.slice(0,1):locations,categories:categoryRows.map((r,i)=>({id:r[0],name_ar:r[1],name_en:r[2],icon:r[3],sort_order:i})),stores:purged?[]:stores,products:purged?[]:products,bundles:purged?[]:bundles,advertisements:purged?[]:advertisements,plans:[],cart:purged?null:parse(sessionStorage.getItem('bisa.demo.cart'),null),orders:[],notifications:[],actor:state.account,settings:{commissionRate:0,paymentsEnabled:false}};
+  }
+
+  function inSelectedLocation(item){
+    const selected=state.location||{}; if(!selected.id||selected.kind==='governorate'||selected.id==='muscat_governorate')return true;
+    if(selected.kind==='area')return item.area_id===selected.id;
+    if(selected.kind==='wilayat'){const area=(state.bootstrap.locations||[]).find(row=>row.id===item.area_id);return area?.parent_id===selected.id;}
+    return true;
+  }
 
   const copy = {
     ar:{navHome:'الرئيسية',navExplore:'استكشف',navCart:'السلة',navOrders:'طلباتي',navAccount:'حسابي',merchantToday:'اليوم',merchantOrders:'الطلبات',merchantCatalog:'الكتالوج',merchantPromotions:'الترويج',merchantMore:'المزيد'},
@@ -55,6 +89,7 @@
 
   async function load({quiet=false}={}){
     if(!quiet){ state.loading=true; render(); }
+    if(STATIC_SHOWCASE){state.bootstrap=demoBootstrap();state.loading=false;render();return;}
     try {
       state.bootstrap = await api('/api/bootstrap');
       if(state.token && !state.bootstrap.actor){ clearAuth(); }
@@ -98,8 +133,9 @@
   function loadingView(){ return `<section class="page section"><div class="hero skeleton"></div><div class="product-grid">${[1,2,3,4].map(()=>'<div class="product-card skeleton loading-card"></div>').join('')}</div></section>`; }
 
   function homeView(){
-    const products=state.bootstrap.products||[], stores=state.bootstrap.stores||[];
+    const products=(state.bootstrap.products||[]).filter(inSelectedLocation), stores=(state.bootstrap.stores||[]).filter(inSelectedLocation), bundles=(state.bootstrap.bundles||[]).filter(inSelectedLocation), advertisements=(state.bootstrap.advertisements||[]).filter(inSelectedLocation);
     return `<div class="page">
+      ${state.bootstrap.demoMode?`<section class="demo-notice"><span>✦</span><div><b>${t('نسخة تجربة للهاتف','Phone demo')}</b><p>${t('المحلات والمنتجات والباقات والإعلانات تجريبية ويمكن حذفها من الإدارة.','Stores, products, bundles and ads are demo records removable from Admin.')}</p></div></section>`:''}
       <section class="hero">
         <div class="hero-copy"><p class="eyebrow">${t('اكتشاف محلي، بأسلوب جديد','Local discovery, reimagined')}</p>
           <h1>${t('اكتشافاتك،','Your discoveries,')} <span>${t('قريبة منك.','close to you.')}</span></h1>
@@ -107,13 +143,18 @@
           <div class="hero-actions"><button class="primary-button" data-go="explore">${t('ابدأ الاستكشاف','Start exploring')} <span>←</span></button><button class="secondary-button" data-open="merchantIntro">${t('انضم كتاجر','Join as a merchant')}</button></div>
         </div><div class="hero-proof" aria-hidden="true"><span>✦</span><span>⌖</span></div>
       </section>
+      ${advertisements.length?`<section class="section">${advertisementCard(advertisements[0])}</section>`:''}
       <section class="section"><div class="search-bar"><label class="search-field"><span>⌕</span><input id="homeSearch" value="${esc(state.filters.query)}" placeholder="${t('ابحث عن منتج أو متجر قريب','Search products or nearby stores')}" aria-label="${t('البحث','Search')}"></label><button class="filter-button" data-go="explore" aria-label="${t('التصفية','Filters')}">≡</button></div></section>
       ${categoriesHtml()}
       <section class="section"><div class="section-head"><div><p class="eyebrow">${t('بين 100 بيسة و2 ر.ع','From 100 baisa to OMR 2')}</p><h2>${t('وصلت اليوم','Arrived today')}</h2></div><button class="text-button" data-go="explore">${t('عرض الكل','See all')}</button></div>${products.length?`<div class="product-grid">${products.slice(0,8).map(productCard).join('')}</div>`:emptyCatalog()}</section>
+      ${bundles.length?`<section class="section"><div class="section-head"><div><p class="eyebrow">${t('عدة اكتشافات معاً','More discoveries together')}</p><h2>${t('باقات المنطقة','Area bundles')}</h2></div></div><div class="store-strip">${bundles.map(bundleCard).join('')}</div></section>`:''}
       <section class="section"><div class="section-head"><div><p class="eyebrow">${t('متاجر موثوقة','Trusted stores')}</p><h2>${t('قريب منك الآن','Near you now')}</h2></div></div>${stores.length?`<div class="store-strip">${stores.map(storeCard).join('')}</div>`:emptyStores()}</section>
       <section class="section info-banner"><span>⌁</span><div><b>${t('الاستلام والتوصيل من المتجر','Pickup and store delivery')}</b><p>${t('بيسا لا تدّعي وجود أسطول توصيل. كل متجر يوضح خياراته ورسومه وموعده قبل التأكيد.','BISA does not claim to operate a fleet. Each store shows its options, fees and timing before confirmation.')}</p></div></section>
     </div>`;
   }
+
+  function advertisementCard(ad){const c=ad.creative||{};return `<article class="demo-ad"><div><span>${esc(ad[state.lang==='ar'?'label_ar':'label_en'])}</span><p>${esc(c[state.lang==='ar'?'bodyAr':'bodyEn']||'')}</p><h2>${esc(c[state.lang==='ar'?'titleAr':'titleEn']||'')}</h2></div><strong aria-hidden="true">${esc(c.icon||'✦')}</strong></article>`;}
+  function bundleCard(b){return `<article class="store-card bundle-card"><div class="store-avatar">🎁</div><div><div class="store-line">${b.verified?'<i class="verified">✓</i>':''}${esc(b[state.lang==='ar'?'merchant_name_ar':'merchant_name_en'])}</div><h3>${esc(b[state.lang==='ar'?'title_ar':'title_en'])}</h3><p>${b.component_count} ${t('مكوّنات','components')} · <strong class="price">${fmt(b.price)}</strong></p></div><div class="fulfillment-tags"><span>${t('القيمة','Value')} ${fmt(b.normalValue)}</span><button class="add-button" data-add-bundle="${esc(b.id)}" data-branch="${esc(b.branch_id)}" aria-label="${t('أضف الباقة','Add bundle')}">＋</button></div></article>`;}
 
   function categoriesHtml(){
     const rows=state.bootstrap.categories||[];
@@ -129,7 +170,7 @@
   function emptyStores(){ return `<div class="empty-state"><div class="empty-icon">⌖</div><h3>${t('المتاجر المعتمدة ستظهر هنا','Approved stores will appear here')}</h3><p>${t('المنطقة لا تصبح عامة إلا عندما يكون فيها فرع معتمد ونشط.','An area becomes public only when it has an approved, active branch.')}</p></div>`; }
 
   function exploreView(){
-    const products=(state.bootstrap.products||[]).filter(p=>!state.filters.category||p.category_id===state.filters.category).filter(p=>!state.filters.query||JSON.stringify(p).toLowerCase().includes(state.filters.query.toLowerCase()));
+    const products=(state.bootstrap.products||[]).filter(inSelectedLocation).filter(p=>!state.filters.category||p.category_id===state.filters.category).filter(p=>!state.filters.query||JSON.stringify(p).toLowerCase().includes(state.filters.query.toLowerCase()));
     return `<div class="page"><header class="page-title"><p class="eyebrow">${t('كل ما حولك','Everything around you')}</p><h1>${t('استكشف بوضوح','Explore clearly')}</h1><p>${t('قارن المنتج والمتجر وطريقة الاستلام قبل أن تضيف للسلة.','Compare product, store and fulfillment before adding to cart.')}</p></header>
       <section class="section"><div class="search-bar"><label class="search-field"><span>⌕</span><input id="exploreSearch" value="${esc(state.filters.query)}" placeholder="${t('اسم المنتج أو المتجر','Product or store name')}" aria-label="${t('البحث','Search')}"></label><button class="filter-button" data-open="filters">≡</button></div><div class="chip-row filter-chips"><button class="chip ${!state.filters.category?'active':''}" data-category="">${t('الكل','All')}</button>${(state.bootstrap.categories||[]).map(c=>`<button class="chip ${state.filters.category===c.id?'active':''}" data-category="${esc(c.id)}">${esc(c[state.lang==='ar'?'name_ar':'name_en'])}</button>`).join('')}</div></section>
       <section class="section"><div class="section-head"><div><h2>${t('النتائج','Results')}</h2><p>${products.length} ${t('منتج','products')}</p></div><div class="segmented"><button data-display="list" class="${state.filters.display==='list'?'active':''}">${t('قائمة','List')}</button><button data-display="map" class="${state.filters.display==='map'?'active':''}">${t('خريطة','Map')}</button></div></div>${state.filters.display==='map'?mapView():products.length?`<div class="product-grid">${products.map(productCard).join('')}</div>`:emptyCatalog()}</section></div>`;
@@ -183,10 +224,11 @@
   async function renderAdmin(){
     $('#shopperNav').hidden=true; $('#merchantNav').hidden=true;
     let overview;
-    try{ overview=await api('/api/admin/overview'); }
+    try{ overview=STATIC_SHOWCASE?{counts:{merchants:state.bootstrap.stores.length,products:state.bootstrap.products.length,bundles:state.bootstrap.bundles.length,ads:state.bootstrap.advertisements.length},demoCounts:state.bootstrap.demoCounts||{},pendingApplications:[]}:await api('/api/admin/overview'); }
     catch(error){ $('#viewRoot').innerHTML=gateView('◈',t('تعذر فتح الإدارة','Administration unavailable'),niceError(error),'admin'); bindView(); return; }
     const pending=overview.pendingApplications||[];
-    $('#viewRoot').innerHTML=`<div class="page"><header class="page-title"><p class="eyebrow">${t('وصول مقيّد ومسجّل','Restricted and audited access')}</p><h1>${t('إدارة BISA','BISA Admin')}</h1><p>${t('الاعتماد من الخادم، وكل قرار يدخل سجل التدقيق.','Server-authorized decisions with a full audit trail.')}</p></header><section class="metric-grid">${Object.entries(overview.counts||{}).slice(0,4).map(([key,value])=>`<div class="metric"><strong>${value}</strong><small>${esc(key)}</small></div>`).join('')}</section><section class="section"><div class="section-head"><div><h2>${t('طلبات المتاجر','Merchant applications')}</h2><p>${pending.length} ${t('تحتاج مراجعة','need review')}</p></div></div>${pending.length?pending.map(app=>`<article class="order-card stacked-card"><p class="eyebrow">${esc(app.id)}</p><h3>${t('طلب متجر جديد','New merchant application')}</h3><p class="muted">${esc(app.status)}</p><div class="hero-actions"><button class="primary-button" data-admin-application="${esc(app.id)}" data-admin-decision="approve">${t('اعتماد وبدء التجربة','Approve & start trial')}</button><button class="secondary-button" data-admin-application="${esc(app.id)}" data-admin-decision="changes_requested">${t('طلب تحديث','Request changes')}</button><button class="danger-button" data-admin-application="${esc(app.id)}" data-admin-decision="reject">${t('رفض','Reject')}</button></div></article>`).join(''):`<div class="empty-state"><div class="empty-icon">✓</div><h3>${t('لا توجد طلبات معلقة','No pending applications')}</h3></div>`}</section><section class="section"><button class="danger-button" data-logout>${t('تسجيل خروج المشرف','Admin sign out')}</button></section></div>`;
+    const demoTotal=Object.values(overview.demoCounts||{}).reduce((sum,value)=>sum+Number(value||0),0);
+    $('#viewRoot').innerHTML=`<div class="page"><header class="page-title"><p class="eyebrow">${t('وصول مقيّد ومسجّل','Restricted and audited access')}</p><h1>${t('إدارة BISA','BISA Admin')}</h1><p>${t('الاعتماد من الخادم، وكل قرار يدخل سجل التدقيق.','Server-authorized decisions with a full audit trail.')}</p></header><section class="metric-grid">${Object.entries(overview.counts||{}).slice(0,4).map(([key,value])=>`<div class="metric"><strong>${value}</strong><small>${esc(key)}</small></div>`).join('')}</section><section class="section demo-admin-card"><div><p class="eyebrow">${t('بيانات العرض','Demo data')}</p><h2>${demoTotal?t(`${demoTotal} سجلاً تجريبياً جاهزاً للحذف`,`${demoTotal} demo records ready to remove`):t('لا توجد بيانات تجريبية','No demo data remains')}</h2><p>${t('يحذف الزر المحلات والمنتجات والباقات والإعلانات والحسابات التجريبية فقط، ولا يلمس البيانات الحقيقية.','The button removes only tagged demo stores, products, bundles, ads and accounts. Real data is preserved.')}</p></div><button class="danger-button" data-open="purgeDemo" ${demoTotal?'':'disabled'}>${t('حذف كل التجريبي','Delete all demo data')}</button></section><section class="section"><div class="section-head"><div><h2>${t('طلبات المتاجر','Merchant applications')}</h2><p>${pending.length} ${t('تحتاج مراجعة','need review')}</p></div></div>${pending.length?pending.map(app=>`<article class="order-card stacked-card"><p class="eyebrow">${esc(app.id)}</p><h3>${t('طلب متجر جديد','New merchant application')}</h3><p class="muted">${esc(app.status)}</p><div class="hero-actions"><button class="primary-button" data-admin-application="${esc(app.id)}" data-admin-decision="approve">${t('اعتماد وبدء التجربة','Approve & start trial')}</button><button class="secondary-button" data-admin-application="${esc(app.id)}" data-admin-decision="changes_requested">${t('طلب تحديث','Request changes')}</button><button class="danger-button" data-admin-application="${esc(app.id)}" data-admin-decision="reject">${t('رفض','Reject')}</button></div></article>`).join(''):`<div class="empty-state"><div class="empty-icon">✓</div><h3>${t('لا توجد طلبات معلقة','No pending applications')}</h3></div>`}</section><section class="section"><button class="danger-button" data-logout>${t('تسجيل خروج المشرف','Admin sign out')}</button></section></div>`;
   }
 
   function bindView(){
@@ -203,7 +245,7 @@
   function loginSheet(role='shopper'){
     openSheet(t(role==='merchant_owner'?'دخول التاجر':'دخول بيسا',role==='merchant_owner'?'Merchant sign in':'Sign in to BISA'),t('حسابك محمي','Your account is protected'),`<form id="loginForm" class="form-grid"><input type="hidden" name="role" value="${role}"><div class="field"><label>${t('الاسم — للحساب الجديد','Name — for a new account')}</label><input name="name" maxlength="80" autocomplete="name"></div><div class="field"><label>${t('رقم الهاتف العُماني','Omani phone number')}</label><input name="phone" inputmode="tel" autocomplete="tel" placeholder="9XXXXXXX" required></div><div class="field"><label>${t('رمز الدخول','PIN')}</label><input name="pin" inputmode="numeric" autocomplete="current-password" minlength="4" maxlength="8" required><small class="helper">${t('من 4 إلى 8 أرقام. لا تشارك الرمز.','4–8 digits. Never share it.')}</small></div><button class="primary-button full" type="submit">${t('دخول آمن','Secure sign in')}</button>${role==='merchant_owner'?`<button class="text-button" type="button" data-login-role="shopper">${t('أدخل كمتسوق أولاً للتقديم','Sign in as shopper to apply first')}</button>`:''}</form>`,root=>{$('#loginForm',root).addEventListener('submit',loginSubmit);});
   }
-  async function loginSubmit(event){ event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget);button.disabled=true;const data=Object.fromEntries(new FormData(event.currentTarget));try{const result=await api('/api/auth',{method:'POST',body:JSON.stringify(data)});saveAuth(result);closeSheet();toast(t('أهلاً بك في بيسا','Welcome to BISA'));await load();}catch(error){toast(niceError(error));button.disabled=false;}}
+  async function loginSubmit(event){ event.preventDefault(); const button=$('button[type="submit"]',event.currentTarget);button.disabled=true;const data=Object.fromEntries(new FormData(event.currentTarget));try{if(STATIC_SHOWCASE){state.account={id:'demo_preview',name:data.name||t('زائر التجربة','Demo visitor'),role:data.role||'shopper',merchantId:''};state.token='demo-preview';localStorage.setItem(STORAGE.account,JSON.stringify(state.account));localStorage.setItem(STORAGE.token,state.token);}else{saveAuth(await api('/api/auth',{method:'POST',body:JSON.stringify(data)}));}closeSheet();toast(t('أهلاً بك في بيسا','Welcome to BISA'));await load();}catch(error){toast(niceError(error));button.disabled=false;}}
 
   function merchantApplySheet(){
     if(!state.account) return loginSheet('shopper');
@@ -228,14 +270,42 @@
   function locationSheet(){ const locations=(state.bootstrap.locations||[]).filter(l=>l.kind==='wilayat'||l.kind==='area');openSheet(t('أين تكتشف اليوم؟','Where are you discovering today?'),t('نظهر المناطق التي فيها متجر معتمد فقط','Only areas with an approved store are public'),`<div class="form-grid">${locations.map(l=>`<button class="option-card" data-location-id="${esc(l.id)}"><span>${l.kind==='wilayat'?'⌖':'•'}</span><div><b>${esc(l[state.lang==='ar'?'name_ar':'name_en'])}</b><small>${l.kind==='wilayat'?t('ولاية','Wilayat'):t('منطقة نشطة','Active area')}</small></div></button>`).join('')}</div>`); }
   function notificationSheet(){ const rows=state.bootstrap.notifications||[];openSheet(t('الإشعارات','Notifications'),t('المطلوب أولاً','Actions first'),rows.length?`<div class="form-grid">${rows.map(n=>`<article class="option-card"><span>${Number(n.requires_action)?'!':'♢'}</span><div><b>${esc(n[state.lang==='ar'?'title_ar':'title_en'])}</b><small>${esc(n[state.lang==='ar'?'body_ar':'body_en'])}</small></div></article>`).join('')}</div>`:`<div class="empty-state"><div class="empty-icon">♢</div><h3>${t('أنت على اطلاع','You are all caught up')}</h3><p>${t('الإجراءات الحقيقية المهمة فقط تظهر هنا.','Only real, important actions appear here.')}</p></div>`); }
 
+  function purgeDemoSheet(){
+    openSheet(t('حذف كل البيانات التجريبية','Delete all demo data'),t('إجراء إداري دائم ومسجّل','Permanent, audited admin action'),`<form id="purgeDemoForm" class="form-grid"><div class="warning-panel"><b>${t('لن تُحذف أي بيانات حقيقية','No real records will be deleted')}</b><p>${t('الحذف يستهدف فقط السجلات الموسومة Demo: المحلات، المنتجات، الباقات، الإعلانات، الفروع والحسابات التجريبية التابعة لها.','Only Demo-tagged stores, products, bundles, ads, branches and their demo accounts are targeted.')}</p></div><div class="field"><label>${t('اكتب العبارة التالية للتأكيد','Type this exact phrase to confirm')}</label><code dir="ltr">DELETE BISA DEMO</code><input name="confirmation" dir="ltr" autocomplete="off" required placeholder="DELETE BISA DEMO"></div><button class="danger-button full" type="submit">${t('حذف التجريبي نهائياً','Permanently delete demo data')}</button><button class="text-button full" type="button" data-close-sheet>${t('إلغاء','Cancel')}</button></form>`,root=>{$('#purgeDemoForm',root).addEventListener('submit',purgeDemoSubmit);});
+  }
+  async function purgeDemoSubmit(event){
+    event.preventDefault(); const form=event.currentTarget,button=$('button[type="submit"]',form),confirmation=new FormData(form).get('confirmation');
+    if(confirmation!=='DELETE BISA DEMO')return toast(t('عبارة التأكيد غير مطابقة','Confirmation phrase does not match'));
+    button.disabled=true;
+    try{
+      if(STATIC_SHOWCASE){localStorage.setItem(STORAGE.demoPurged,'true');sessionStorage.removeItem('bisa.demo.cart');state.bootstrap=demoBootstrap();}
+      else await api('/api/admin/demo-data/purge',{method:'POST',body:JSON.stringify({confirmation})});
+      closeSheet();toast(t('حُذفت البيانات التجريبية فقط','Demo data removed'));await renderAdmin();
+    }catch(error){toast(niceError(error));button.disabled=false;}
+  }
+
+  function demoAddToCart(payload,replaceCart=false){
+    const rows=payload.kind==='bundle'?state.bootstrap.bundles:state.bootstrap.products;
+    const item=(rows||[]).find(row=>row.id===payload.itemId); if(!item)throw Object.assign(new Error('item_not_found'),{code:'item_not_found'});
+    const merchantId=item.merchant_id,branchId=payload.branchId||item.branch_id,cart=state.bootstrap.cart;
+    if(cart?.items?.length&&cart.merchant_id!==merchantId&&!replaceCart)throw Object.assign(new Error('cross_store_cart_confirmation_required'),{code:'cross_store_cart_confirmation_required'});
+    const price=Number(item.price||0).toFixed(3),name=item[state.lang==='ar'?(payload.kind==='bundle'?'title_ar':'name_ar'):(payload.kind==='bundle'?'title_en':'name_en')];
+    const next=cart?.merchant_id===merchantId&&!replaceCart?cart:{merchant_id:merchantId,branch_id:branchId,items:[],subtotal:'0.000'};
+    const found=next.items.find(row=>row.item_id===item.id&&row.item_kind===payload.kind);
+    if(found)found.quantity+=1;else next.items.push({item_kind:payload.kind,item_id:item.id,snapshot_name:name,unitPrice:price,quantity:1});
+    next.subtotal=next.items.reduce((sum,row)=>sum+Number(row.unitPrice)*Number(row.quantity),0).toFixed(3);
+    sessionStorage.setItem('bisa.demo.cart',JSON.stringify(next));state.bootstrap.cart=next;return next;
+  }
+
   async function addProduct(button){
     if(!state.account)return loginSheet('shopper');
-    const payload={kind:'product',itemId:button.dataset.addProduct,branchId:button.dataset.branch,quantity:1};
-    try{state.bootstrap.cart=await api('/api/cart',{method:'POST',body:JSON.stringify(payload)});toast(t('أُضيف إلى السلة','Added to cart'));render();}
+    const kind=button.dataset.addBundle?'bundle':'product';
+    const payload={kind,itemId:button.dataset.addBundle||button.dataset.addProduct,branchId:button.dataset.branch,quantity:1};
+    try{state.bootstrap.cart=STATIC_SHOWCASE?demoAddToCart(payload):await api('/api/cart',{method:'POST',body:JSON.stringify(payload)});toast(kind==='bundle'?t('أُضيفت الباقة إلى السلة','Bundle added to cart'):t('أُضيف إلى السلة','Added to cart'));render();}
     catch(error){if(error.code==='cross_store_cart_confirmation_required')return confirmReplace(payload);toast(niceError(error));}
   }
-  function confirmReplace(payload){openSheet(t('سلة من متجر آخر','Cart from another store'),t('نحافظ على وضوح التسليم','Keeping fulfillment clear'),`<div class="empty-state"><div class="empty-icon">⇄</div><h3>${t('استبدال محتوى السلة؟','Replace current cart?')}</h3><p>${t('بيسا يستخدم سلة متجر واحد. سيُزال محتوى السلة الحالية قبل إضافة هذا المنتج.','BISA uses a one-store cart. Current items will be removed before adding this product.')}</p><button class="primary-button full" data-confirm-replace>${t('نعم، استبدل السلة','Yes, replace cart')}</button><button class="text-button full" data-close-sheet>${t('إبقاء السلة الحالية','Keep current cart')}</button></div>`,root=>{$('[data-confirm-replace]',root).addEventListener('click',async()=>{try{state.bootstrap.cart=await api('/api/cart',{method:'POST',body:JSON.stringify({...payload,replaceCart:true})});closeSheet();toast(t('تم استبدال السلة','Cart replaced'));render();}catch(error){toast(niceError(error));}});});}
-  async function checkout(){const mode=$('input[name="fulfillment"]:checked')?.value||'pickup';const key=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;try{const result=await api('/api/checkout',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({idempotencyKey:key,fulfillmentMode:mode})});toast(t('أُرسل الطلب للمتجر','Order sent to store'));state.view='orders';await load();}catch(error){toast(niceError(error));}}
+  function confirmReplace(payload){openSheet(t('سلة من متجر آخر','Cart from another store'),t('نحافظ على وضوح التسليم','Keeping fulfillment clear'),`<div class="empty-state"><div class="empty-icon">⇄</div><h3>${t('استبدال محتوى السلة؟','Replace current cart?')}</h3><p>${t('بيسا يستخدم سلة متجر واحد. سيُزال محتوى السلة الحالية قبل إضافة هذا المنتج.','BISA uses a one-store cart. Current items will be removed before adding this product.')}</p><button class="primary-button full" data-confirm-replace>${t('نعم، استبدل السلة','Yes, replace cart')}</button><button class="text-button full" data-close-sheet>${t('إبقاء السلة الحالية','Keep current cart')}</button></div>`,root=>{$('[data-confirm-replace]',root).addEventListener('click',async()=>{try{state.bootstrap.cart=STATIC_SHOWCASE?demoAddToCart(payload,true):await api('/api/cart',{method:'POST',body:JSON.stringify({...payload,replaceCart:true})});closeSheet();toast(t('تم استبدال السلة','Cart replaced'));render();}catch(error){toast(niceError(error));}});});}
+  async function checkout(){if(STATIC_SHOWCASE)return toast(t('هذه معاينة GitHub Pages. إرسال الطلب الحقيقي يحتاج تشغيل خادم BISA.','This is a GitHub Pages preview. Real orders require the BISA server.'));const mode=$('input[name="fulfillment"]:checked')?.value||'pickup';const key=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;try{await api('/api/checkout',{method:'POST',headers:{'Idempotency-Key':key},body:JSON.stringify({idempotencyKey:key,fulfillmentMode:mode})});toast(t('أُرسل الطلب للمتجر','Order sent to store'));state.view='orders';await load();}catch(error){toast(niceError(error));}}
   async function decide(button){button.disabled=true;try{await api('/api/merchant/order',{method:'POST',body:JSON.stringify({orderId:button.dataset.orderId,decision:button.dataset.orderDecision})});toast(t('تم تحديث الطلب','Order updated'));await load();}catch(error){toast(niceError(error));button.disabled=false;}}
   async function decideApplication(button){button.disabled=true;const note=button.dataset.adminDecision==='approve'?'':prompt(t('ملاحظة القرار','Decision note'))||'';try{await api('/api/admin/merchant-application',{method:'POST',body:JSON.stringify({applicationId:button.dataset.adminApplication,decision:button.dataset.adminDecision,note})});toast(t('تم حفظ القرار في سجل التدقيق','Decision saved to the audit log'));renderAdmin();}catch(error){toast(niceError(error));button.disabled=false;}}
   async function logout(){try{await api('/api/auth/logout',{method:'POST',body:'{}'});}catch{}clearAuth();closeSheet();state.view='home';toast(t('تم تسجيل الخروج','Signed out'));await load();}
@@ -249,11 +319,12 @@
     else if(button.dataset.merchantGo){state.merchantView=button.dataset.merchantGo;render();}
     else if(button.dataset.category!==undefined){state.filters.category=button.dataset.category;state.view='explore';render();}
     else if(button.dataset.display){state.filters.display=button.dataset.display;render();}
-    else if(button.dataset.addProduct)addProduct(button);
+    else if(button.dataset.addProduct||button.dataset.addBundle)addProduct(button);
     else if(button.dataset.loginRole)loginSheet(button.dataset.loginRole);
     else if(button.dataset.open==='merchantIntro'||button.dataset.open==='merchantApply')merchantApplySheet();
     else if(button.dataset.open==='quickProduct')quickProductSheet();
     else if(button.dataset.open==='stockCheck')stockSheet();
+    else if(button.dataset.open==='purgeDemo')purgeDemoSheet();
     else if(button.dataset.open==='filters')toast(t('اختر الفئة أو استخدم البحث','Choose a category or use search'));
     else if(button.hasAttribute('data-checkout'))checkout();
     else if(button.dataset.orderDecision)decide(button);
@@ -270,6 +341,6 @@
   window.addEventListener('popstate',()=>{state.view=new URLSearchParams(location.search).get('view')||'home';render();});
   navigator.serviceWorker?.addEventListener('message',event=>{if(event.data?.type==='bisa:notification'){load({quiet:true});}});
 
-  if('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('/service-worker.js').catch(()=>{});
+  if('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('service-worker.js').catch(()=>{});
   load();
 })();

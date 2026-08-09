@@ -127,6 +127,9 @@ def connect(immediate=False):
 SCHEMA = r"""
 CREATE TABLE IF NOT EXISTS schema_migrations(
  version TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS demo_records(
+ entity_kind TEXT NOT NULL, entity_id TEXT NOT NULL, created_at TEXT NOT NULL,
+ PRIMARY KEY(entity_kind,entity_id));
 CREATE TABLE IF NOT EXISTS accounts(
  id TEXT PRIMARY KEY, phone TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
  pin_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL);
@@ -338,37 +341,82 @@ def init_db() -> None:
 
 
 def seed_demo(con) -> None:
+    """Create clearly tagged showcase data across all six Muscat wilayats."""
     stamp = now_iso()
-    shopper = "acct_demo_shopper"
-    merchant_owner = "acct_demo_merchant"
-    con.execute("INSERT OR IGNORE INTO accounts VALUES(?,?,?,?,?,?)", (shopper, "96890000001", "متسوق تجريبي", hash_secret("1234"), "active", stamp))
-    con.execute("INSERT OR IGNORE INTO accounts VALUES(?,?,?,?,?,?)", (merchant_owner, "96890000002", "مالك متجر تجريبي", hash_secret("1234"), "active", stamp))
+
+    def mark(kind: str, entity_id: str) -> None:
+        con.execute("INSERT OR IGNORE INTO demo_records VALUES(?,?,?)", (kind, entity_id, stamp))
+
+    shopper = "demo_account_shopper"
+    con.execute("INSERT OR IGNORE INTO accounts VALUES(?,?,?,?,?,?)", (shopper, "96890000001", "متسوق بيسا التجريبي", hash_secret("1234"), "active", stamp))
     con.execute("INSERT OR IGNORE INTO account_roles VALUES(?,?,?,1)", (shopper, "shopper", ""))
-    con.execute("INSERT OR IGNORE INTO account_roles VALUES(?,?,?,1)", (merchant_owner, "merchant_owner", "merchant_demo"))
-    con.execute("INSERT OR IGNORE INTO locations VALUES(?,?,?,?,?,?,?,?)", ("area_mawaleh", "wilayat_seeb", "area", "الموالح", "Al Mawaleh", 1, 1, stamp))
-    con.execute("""INSERT OR IGNORE INTO merchants
-        (id,owner_account_id,name_ar,name_en,merchant_type,status,verified,created_at,updated_at)
-        VALUES('merchant_demo',?,?,?,'store','approved',1,?,?)""", (merchant_owner, "ركن بيسا", "BISA Corner", stamp, stamp))
-    con.execute("""INSERT OR IGNORE INTO store_branches
-        (id,merchant_id,name_ar,name_en,wilayah_id,area_id,address_text,latitude,longitude,status,active,public_visible,created_at,updated_at)
-        VALUES('branch_demo','merchant_demo','فرع الموالح','Al Mawaleh Branch','wilayat_seeb','area_mawaleh','الموالح الجنوبية',23.596,58.221,'approved',1,1,?,?)""", (stamp, stamp))
-    con.execute("INSERT OR IGNORE INTO fulfillment_profiles(branch_id,pickup_enabled,office_enabled,office_fee_baisa,office_minimum_baisa,office_free_threshold_baisa,home_enabled,home_fee_baisa,home_minimum_baisa,home_free_threshold_baisa,zones_json,eta_text,updated_at) VALUES('branch_demo',1,1,1000,3000,10000,1,2000,5000,12000,?, 'خلال 60–90 دقيقة', ?)", (dumps(["area_mawaleh"]), stamp))
-    products = [
-        ("prod_organizer", "storage", "منظم صغير", "Mini organizer", 1300, "متوفر اليوم"),
-        ("prod_cups", "kitchen", "أكواب ورقية", "Paper cups", 500, "وصل اليوم"),
-        ("prod_snack", "snacks", "مكسرات مشكلة", "Mixed nuts", 1900, "لقطات تستاهل"),
-        ("prod_notebook", "stationery", "دفتر ملاحظات", "Notebook", 250, "وصل اليوم"),
-        ("prod_clean", "cleaning", "إسفنجة تنظيف", "Cleaning sponge", 100, "قريب منك"),
-        ("prod_party", "party", "زينة حفلة", "Party decoration", 2000, "مختارات"),
+    mark("account", shopper)
+
+    showcases = [
+        ("muscat", "مركز مسقط", "Muscat Centre", "لمسات الميناء", "Harbour Finds", 23.615, 58.594, "🪴"),
+        ("muttrah", "مركز مطرح", "Muttrah Centre", "لقطات السوق", "Souq Pop", 23.618, 58.565, "🛍️"),
+        ("bawshar", "الخوير", "Al Khuwair", "بيت بيسا", "BISA Home", 23.594, 58.424, "🏠"),
+        ("seeb", "الموالح", "Al Mawaleh", "يوميات الموالح", "Mawaleh Daily", 23.596, 58.221, "✨"),
+        ("al_amerat", "مركز العامرات", "Al Amerat Centre", "لمعة العامرات", "Amerat Spark", 23.500, 58.505, "🎁"),
+        ("qurayyat", "مركز قريات", "Qurayyat Centre", "اختيارات الساحل", "Coast Picks", 23.263, 58.913, "🌊"),
     ]
-    for pid, category, ar, en, price, description in products:
-        con.execute("""INSERT OR IGNORE INTO products
-            (id,merchant_id,category_id,name_ar,name_en,description_ar,description_en,price_baisa,images_json,status,active,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,?,?,'approved',1,?,?)""", (pid, "merchant_demo", category, ar, en, description, description, price, "[]", stamp, stamp))
-        con.execute("INSERT OR IGNORE INTO product_branch_inventory VALUES(?,?, 'tracked',25,'in_stock',?,'',1,?)", (pid, "branch_demo", stamp, stamp))
-    con.execute("INSERT OR IGNORE INTO merchant_return_policies VALUES('policy_demo','merchant_demo',1,15,15,'المنتج بحالته الأصلية مع إثبات الشراء',1,'[]','داخل التطبيق','حقوق المستهلك النظامية محفوظة',1,?)", (stamp,))
-    con.execute("UPDATE merchants SET return_policy_id='policy_demo' WHERE id='merchant_demo'")
-    con.execute("INSERT OR IGNORE INTO merchant_subscriptions VALUES('sub_demo','merchant_demo','advanced_3m',?,?, 'active','demo',?)", (stamp, (datetime.now(UTC)+timedelta(days=90)).isoformat(), stamp))
+    templates = [
+        ("storage", "منظم يومي", "Daily organizer", 1300),
+        ("kitchen", "أكواب ملوّنة", "Color cups", 500),
+        ("stationery", "دفتر جيب", "Pocket notebook", 250),
+        ("cleaning", "إسفنجة عملية", "Handy sponge", 100),
+        ("snacks", "مكسرات مختارة", "Selected nuts", 1900),
+        ("party", "زينة صغيرة", "Mini party decor", 2000),
+    ]
+    for order, (key, area_ar, area_en, store_ar, store_en, lat, lng, icon) in enumerate(showcases):
+        account_id = f"demo_account_{key}"
+        merchant_id = f"demo_merchant_{key}"
+        area_id = f"demo_area_{key}"
+        branch_id = f"demo_branch_{key}"
+        policy_id = f"demo_policy_{key}"
+        con.execute("INSERT OR IGNORE INTO accounts VALUES(?,?,?,?,?,?)", (account_id, f"96892{order:06d}", f"مالك {store_ar}", hash_secret("1234"), "active", stamp))
+        con.execute("INSERT OR IGNORE INTO account_roles VALUES(?,?,?,1)", (account_id, "merchant_owner", merchant_id))
+        con.execute("INSERT OR IGNORE INTO locations VALUES(?,?,?,?,?,?,?,?)", (area_id, f"wilayat_{key}", "area", area_ar, area_en, order + 1, 1, stamp))
+        con.execute("""INSERT OR IGNORE INTO merchants
+            (id,owner_account_id,name_ar,name_en,merchant_type,status,verified,created_at,updated_at)
+            VALUES(?,?,?,?,'store','approved',1,?,?)""", (merchant_id, account_id, store_ar, store_en, stamp, stamp))
+        con.execute("""INSERT OR IGNORE INTO store_branches
+            (id,merchant_id,name_ar,name_en,wilayah_id,area_id,address_text,latitude,longitude,status,active,public_visible,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,'approved',1,1,?,?)""",
+            (branch_id, merchant_id, f"فرع {area_ar}", f"{area_en} Branch", f"wilayat_{key}", area_id, area_ar, lat, lng, stamp, stamp))
+        con.execute("""INSERT OR IGNORE INTO fulfillment_profiles
+            (branch_id,pickup_enabled,office_enabled,office_fee_baisa,office_minimum_baisa,office_free_threshold_baisa,
+             home_enabled,home_fee_baisa,home_minimum_baisa,home_free_threshold_baisa,zones_json,eta_text,updated_at)
+            VALUES(?,1,1,1000,3000,10000,1,2000,5000,12000,?,'خلال 60–90 دقيقة',?)""", (branch_id, dumps([area_id]), stamp))
+        con.execute("""INSERT OR IGNORE INTO merchant_return_policies VALUES(
+            ?,?,1,15,15,'المنتج بحالته الأصلية مع إثبات الشراء',1,'[]','داخل التطبيق','حقوق المستهلك النظامية محفوظة',1,?)""", (policy_id, merchant_id, stamp))
+        con.execute("UPDATE merchants SET return_policy_id=? WHERE id=?", (policy_id, merchant_id))
+        subscription_id = f"demo_subscription_{key}"
+        con.execute("INSERT OR IGNORE INTO merchant_subscriptions VALUES(?,?, 'advanced_3m',?,?, 'active','demo',?)", (subscription_id, merchant_id, stamp, (datetime.now(UTC)+timedelta(days=90)).isoformat(), stamp))
+        product_ids = []
+        for product_order in range(4):
+            category, name_ar, name_en, price = templates[(order + product_order) % len(templates)]
+            product_id = f"demo_product_{key}_{product_order + 1}"
+            product_ids.append(product_id)
+            con.execute("""INSERT OR IGNORE INTO products
+                (id,merchant_id,category_id,name_ar,name_en,description_ar,description_en,price_baisa,images_json,status,active,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,'approved',1,?,?)""",
+                (product_id, merchant_id, category, name_ar, name_en, f"{icon} اكتشاف تجريبي في {area_ar}", f"{icon} Demo discovery in {area_en}", price, "[]", stamp, stamp))
+            con.execute("INSERT OR IGNORE INTO product_branch_inventory VALUES(?,?,'tracked',25,'in_stock',?,'',1,?)", (product_id, branch_id, stamp, stamp))
+            mark("product", product_id)
+        bundle_id = f"demo_bundle_{key}"
+        con.execute("""INSERT OR IGNORE INTO bundles
+            (id,merchant_id,branch_id,title_ar,title_en,description,selling_price_baisa,status,created_at,updated_at)
+            VALUES(?,?,?,?,?,'باقة تجريبية مختارة',3100,'approved',?,?)""", (bundle_id, merchant_id, branch_id, f"باقة {area_ar}", f"{area_en} Bundle", stamp, stamp))
+        con.executemany("INSERT OR IGNORE INTO bundle_items VALUES(?,?,?)", [(bundle_id, product_ids[0], 1), (bundle_id, product_ids[1], 2)])
+        campaign_id = f"demo_ad_{key}"
+        creative = {"areaId": area_id, "titleAr": f"اكتشف {store_ar}", "titleEn": f"Discover {store_en}", "bodyAr": f"اختيارات اليوم في {area_ar}", "bodyEn": f"Today's picks in {area_en}", "icon": icon}
+        con.execute("""INSERT OR IGNORE INTO ad_campaigns
+            (id,owner_kind,owner_id,placement,target_json,landing_kind,landing_id,label_ar,label_en,status,frequency_cap,created_at,updated_at)
+            VALUES(?,'merchant',?,'home_hero',?,'store',?,'إعلان تجريبي','Demo sponsored','approved',3,?,?)""",
+            (campaign_id, merchant_id, dumps(creative), branch_id, stamp, stamp))
+        for kind, entity_id in (("account", account_id), ("area", area_id), ("merchant", merchant_id), ("branch", branch_id), ("policy", policy_id), ("subscription", subscription_id), ("bundle", bundle_id), ("ad", campaign_id)):
+            mark(kind, entity_id)
 
 
 def rowdict(row):
@@ -453,6 +501,8 @@ class BisaService:
             categories = [rowdict(r) for r in con.execute("SELECT * FROM product_categories WHERE active=1 ORDER BY sort_order")]
             stores = self._stores(con)
             products = self._products(con)
+            bundles = self._bundles(con)
+            advertisements = self._advertisements(con)
             plans = []
             if actor and actor.get("role") in {"merchant_owner", "merchant_manager", "merchant_staff", "admin", "super_admin"}:
                 plans = [self._plan(r) for r in con.execute("SELECT * FROM subscription_plans WHERE active=1 ORDER BY sort_order")]
@@ -469,8 +519,10 @@ class BisaService:
                     target_kind, target_id = actor.get("role", ""), actor.get("accountId", "")
                 notifications = [dict(r) for r in con.execute("""SELECT * FROM notifications
                     WHERE target_kind=? AND target_id=? ORDER BY requires_action DESC, created_at DESC LIMIT 100""", (target_kind, target_id))]
+            demo_counts = {r["entity_kind"]: r["n"] for r in con.execute("SELECT entity_kind,COUNT(*) n FROM demo_records GROUP BY entity_kind")}
             return {"locations": [rowdict(r) for r in location_rows], "categories": categories,
-                    "stores": stores, "products": products, "plans": plans, "cart": cart,
+                    "stores": stores, "products": products, "bundles": bundles, "advertisements": advertisements,
+                    "demoMode": bool(demo_counts), "demoCounts": demo_counts, "plans": plans, "cart": cart,
                     "orders": orders, "notifications": notifications,
                     "actor": actor, "settings": {"commissionRate": settings(con).get("commissionRate", 0), "paymentsEnabled": settings(con).get("paymentsEnabled", False)}}
 
@@ -510,6 +562,35 @@ class BisaService:
         output=[]
         for row in rows:
             item=dict(row); item["price"] = omr(item.pop("price_baisa")); item["images"] = loads(item.pop("images_json"), []); output.append(item)
+        return output
+
+    def _bundles(self, con) -> list:
+        rows = con.execute("""SELECT b.*,m.name_ar merchant_name_ar,m.name_en merchant_name_en,m.verified,
+            s.name_ar branch_name_ar,s.name_en branch_name_en,s.area_id,
+            (SELECT COUNT(*) FROM bundle_items i WHERE i.bundle_id=b.id) component_count,
+            (SELECT COALESCE(SUM(p.price_baisa*i.quantity),0) FROM bundle_items i JOIN products p ON p.id=i.product_id WHERE i.bundle_id=b.id) normal_value_baisa
+            FROM bundles b JOIN merchants m ON m.id=b.merchant_id JOIN store_branches s ON s.id=b.branch_id
+            WHERE b.status='approved' AND m.status='approved' AND s.status='approved' AND s.active=1 AND s.public_visible=1
+            ORDER BY b.updated_at DESC LIMIT 100""").fetchall()
+        output = []
+        for row in rows:
+            item = dict(row)
+            item["price"] = omr(item.pop("selling_price_baisa"))
+            item["normalValue"] = omr(item.pop("normal_value_baisa"))
+            output.append(item)
+        return output
+
+    def _advertisements(self, con) -> list:
+        rows = con.execute("""SELECT a.id,a.owner_id,a.placement,a.target_json,a.landing_kind,a.landing_id,
+            a.label_ar,a.label_en,m.name_ar merchant_name_ar,m.name_en merchant_name_en,b.area_id
+            FROM ad_campaigns a JOIN merchants m ON m.id=a.owner_id
+            JOIN store_branches b ON b.id=a.landing_id
+            WHERE a.status='approved' AND m.status='approved' AND b.status='approved' AND b.active=1 AND b.public_visible=1
+              AND (a.starts_at='' OR a.starts_at<=?) AND (a.ends_at='' OR a.ends_at>?)
+            ORDER BY a.created_at DESC LIMIT 50""", (now_iso(), now_iso())).fetchall()
+        output=[]
+        for row in rows:
+            item=dict(row); item["creative"]=loads(item.pop("target_json"),{}); output.append(item)
         return output
 
     def search(self, query="", category="", branch_id="") -> dict:
@@ -801,4 +882,61 @@ class BisaService:
         with connect() as con:
             return {"pendingApplications":[dict(r) for r in con.execute("SELECT * FROM merchant_applications WHERE status IN('submitted','under_review','changes_requested') ORDER BY submitted_at")],
                     "counts":{table:con.execute(f"SELECT COUNT(*) n FROM {table}").fetchone()["n"] for table in ("merchants","store_branches","products","orders","ad_campaigns","suppliers")},
+                    "demoCounts":{r["entity_kind"]:r["n"] for r in con.execute("SELECT entity_kind,COUNT(*) n FROM demo_records GROUP BY entity_kind")},
                     "settings":settings(con),"plans":[self._plan(r) for r in con.execute("SELECT * FROM subscription_plans ORDER BY sort_order")]}
+
+    def purge_demo_data(self, actor, confirmation: str) -> dict:
+        require_role(actor,"admin","super_admin")
+        if confirmation != "DELETE BISA DEMO":
+            raise DomainError("demo_delete_confirmation_required", 422)
+        with connect(immediate=True) as con:
+            records=[dict(r) for r in con.execute("SELECT * FROM demo_records")]
+            if not records:
+                return {"ok":True,"deleted":0,"counts":{},"duplicate":True}
+            grouped={}
+            for row in records: grouped.setdefault(row["entity_kind"],[]).append(row["entity_id"])
+
+            def ids(kind): return grouped.get(kind,[])
+            def delete_where(table,column,values):
+                if not values: return 0
+                marks=','.join('?' for _ in values)
+                return con.execute(f"DELETE FROM {table} WHERE {column} IN ({marks})",values).rowcount
+
+            merchant_ids=ids("merchant"); account_ids=ids("account"); branch_ids=ids("branch")
+            order_ids=[]; cart_ids=[]; application_ids=[]
+            if merchant_ids or account_ids:
+                merchant_marks=','.join('?' for _ in merchant_ids) or "NULL"
+                account_marks=','.join('?' for _ in account_ids) or "NULL"
+                params=merchant_ids+account_ids
+                order_ids=[r["id"] for r in con.execute(f"SELECT id FROM orders WHERE merchant_id IN ({merchant_marks}) OR account_id IN ({account_marks})",params)]
+                cart_ids=[r["id"] for r in con.execute(f"SELECT id FROM carts WHERE merchant_id IN ({merchant_marks}) OR account_id IN ({account_marks})",params)]
+            if merchant_ids:
+                marks=','.join('?' for _ in merchant_ids)
+                application_ids=[r["id"] for r in con.execute(f"SELECT id FROM merchant_applications WHERE merchant_id IN ({marks})",merchant_ids)]
+            counts={}
+            for table,column,values in (
+                ("ad_events","campaign_id",ids("ad")), ("ad_campaigns","id",ids("ad")),
+                ("order_items","order_id",order_ids), ("inventory_reservations","order_id",order_ids), ("orders","id",order_ids),
+                ("cart_items","cart_id",cart_ids), ("carts","id",cart_ids),
+                ("favorites","entity_id",ids("product")+ids("bundle")+merchant_ids),
+                ("inventory_audits","branch_id",branch_ids), ("bundle_items","bundle_id",ids("bundle")), ("bundles","id",ids("bundle")),
+                ("product_branch_inventory","product_id",ids("product")), ("products","id",ids("product")),
+                ("merchant_subscriptions","id",ids("subscription")), ("merchant_return_policies","id",ids("policy")),
+                ("fulfillment_profiles","branch_id",branch_ids), ("merchant_documents","application_id",application_ids),
+                ("merchant_applications","id",application_ids), ("store_branches","id",branch_ids),
+                ("account_roles","merchant_id",merchant_ids), ("merchants","id",merchant_ids),
+                ("sessions","account_id",account_ids), ("account_roles","account_id",account_ids), ("accounts","id",account_ids),
+            ):
+                removed=delete_where(table,column,values)
+                if removed: counts[table]=counts.get(table,0)+removed
+            for area_id in ids("area"):
+                used=con.execute("SELECT EXISTS(SELECT 1 FROM store_branches WHERE area_id=? UNION ALL SELECT 1 FROM merchant_applications WHERE payload LIKE ?) n",(area_id,f"%{area_id}%")).fetchone()["n"]
+                if not used:
+                    counts["locations"]=counts.get("locations",0)+con.execute("DELETE FROM locations WHERE id=?",(area_id,)).rowcount
+            con.execute("DELETE FROM notifications WHERE target_id LIKE 'demo_%' OR route LIKE '%demo_%' OR dedupe_key LIKE '%demo_%'")
+            con.execute("DELETE FROM analytics_events WHERE entity_id LIKE 'demo_%'")
+            con.execute("DELETE FROM demo_records")
+            total=sum(counts.values())
+            con.execute("INSERT INTO admin_audit_logs VALUES(?,?,?,?,?,?,?,?,?)",
+                (new_id("audit"),actor["accountId"],"demo_data_purged","demo_dataset","all",dumps(grouped),dumps({"counts":counts}),"Owner requested demo cleanup",now_iso()))
+            return {"ok":True,"deleted":total,"counts":counts,"duplicate":False}
