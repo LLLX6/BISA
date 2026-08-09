@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: bisa-api
+    runtime: python
+    autoDeploy: false
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bisa_server.py
+    healthCheckPath: /healthz
+    envVars:
+      - key: BISA_ENV
+        value: production
+      - key: BISA_RELEASE
+        value: 0.1.0
+      - key: BISA_SEED_SAMPLE_DATA
+        value: false
+      - key: BISA_DB_PATH
+        sync: false
+      - key: BISA_UPLOAD_DIR
+        sync: false
+      - key: BISA_BACKUP_DIR
+        sync: false
+      - key: BISA_PUBLIC_URL
+        sync: false
+      - key: BISA_ALLOWED_ORIGINS
+        sync: false

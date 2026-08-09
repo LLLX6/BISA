@@ -1,0 +1,14 @@
+{
+  "name": "bisa-marketplace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Quality tooling for the BISA local commerce PWA",
+  "scripts": {
+    "check:js": "node --check assets/scripts/bisa-app.js && node --check tests/smoke-bisa-ui.js",
+    "test:ui": "node tests/smoke-bisa-ui.js",
+    "test:performance": "node tests/performance-bisa-ui.js"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}

@@ -1,0 +1,42 @@
+name: BISA quality
+
+on:
+  push:
+    branches: [main, "codex/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m py_compile bisa_config.py bisa_domain.py bisa_server.py scripts/create_bisa_admin.py tests/test_bisa_domain.py scripts/verify_bisa.py
+      - run: python -m unittest tests.test_bisa_domain -v
+      - run: python scripts/verify_bisa.py
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check:js
+      - run: npm run test:ui
+      - run: npm run test:performance

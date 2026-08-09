@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="بيسا">
+  <defs><linearGradient id="g" x1=".1" y1=".1" x2=".9" y2=".9"><stop stop-color="#FF5A36"/><stop offset="1" stop-color="#5B3DF5"/></linearGradient></defs>
+  <rect width="512" height="512" rx="156" fill="#FFF7F1"/>
+  <path d="M132 110h139c95 0 143 56 143 120 0 40-21 74-57 94 41 18 65 54 65 99 0 28-7 51-17 69H250c-89 0-156-63-156-149V153c0-25 14-43 38-43Z" fill="url(#g)"/>
+  <path d="M186 183h69c45 0 72 22 72 56 0 35-27 56-72 56h-69V183Zm0 179h78c47 0 74 22 74 61 0 7-1 13-3 18h-92c-32 0-57-24-57-56v-23Z" fill="#fff"/>
+  <circle cx="389" cy="121" r="42" fill="#FFC83D" stroke="#fff" stroke-width="20"/>
+</svg>

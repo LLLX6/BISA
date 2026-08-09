@@ -1,0 +1,2 @@
+# The BISA V1 API uses the Python standard library only.
+# Add integration SDKs only when the corresponding adapter is implemented and tested.
