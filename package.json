@@ -1,12 +1,16 @@
 {
   "name": "bisa-marketplace",
-  "version": "0.1.1",
+  "version": "0.2.0-dev",
   "private": true,
-  "description": "Quality tooling for the BISA local commerce PWA",
+  "description": "BISA local-commerce PWA quality and release tooling",
   "scripts": {
-    "check:js": "node --check assets/scripts/bisa-app.js && node --check tests/smoke-bisa-ui.js",
+    "build:pwa-icons": "node scripts/build_bisa_icons.js",
+    "check:js": "node --check assets/scripts/bisa-app.js && node --check assets/scripts/bisa-map.js && node --check service-worker.js && node --check scripts/build_bisa_icons.js && node --check tests/test-bisa-map.js && node --check tests/smoke-bisa-ui.js && node --check tests/performance-bisa-ui.js",
+    "verify": "python scripts/verify_bisa.py",
+    "test:map": "node tests/test-bisa-map.js",
     "test:ui": "node tests/smoke-bisa-ui.js",
-    "test:performance": "node tests/performance-bisa-ui.js"
+    "test:performance": "node tests/performance-bisa-ui.js",
+    "test": "npm run check:js && npm run test:map && npm run test:ui && npm run test:performance"
   },
   "devDependencies": {
     "playwright": "1.61.1"

@@ -1,7 +1,8 @@
 {
-  "id": "./?source=pwa-bisa",
+  "id": "./",
   "name": "BISA | بيسا",
   "short_name": "بيسا",
+  "version": "0.2.0-dev",
   "description": "اكتشافاتك، قريبة منك. منتجات مختارة من متاجر قريبة في عُمان.",
   "lang": "ar",
   "dir": "rtl",
@@ -11,12 +12,17 @@
   "orientation": "portrait-primary",
   "background_color": "#FFF7F1",
   "theme_color": "#FF5A36",
+  "prefer_related_applications": false,
   "categories": ["shopping", "lifestyle", "business"],
   "icons": [
-    {"src":"assets/brand/bisa-mark.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+    {"src":"app-icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"app-icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
+    {"src":"app-icon-maskable-192.png","sizes":"192x192","type":"image/png","purpose":"maskable"},
+    {"src":"app-icon-maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"},
+    {"src":"assets/brand/bisa-mark.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}
   ],
   "shortcuts": [
-    {"name":"استكشف | Explore","url":"./?view=explore","icons":[{"src":"assets/brand/bisa-mark.svg","sizes":"any","type":"image/svg+xml"}]},
-    {"name":"السلة | Cart","url":"./?view=cart","icons":[{"src":"assets/brand/bisa-mark.svg","sizes":"any","type":"image/svg+xml"}]}
+    {"name":"استكشف | Explore","short_name":"استكشف","description":"اكتشف المنتجات والمتاجر القريبة","url":"./?view=explore","icons":[{"src":"app-icon-192.png","sizes":"192x192","type":"image/png"}]},
+    {"name":"السلة | Cart","short_name":"السلة","description":"افتح سلة بيسا","url":"./?view=cart","icons":[{"src":"app-icon-192.png","sizes":"192x192","type":"image/png"}]}
   ]
 }

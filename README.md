@@ -17,7 +17,7 @@ BISA is a bilingual, mobile-first local commerce marketplace for discovering sel
 - Checkout creates an idempotent order and inventory reservations. Stock is decremented only when the merchant accepts.
 - Areas are public only when they contain an approved, active, public branch.
 - Store, office and home fulfillment are merchant-provided. BISA does not claim to operate a delivery fleet.
-- Payment, WhatsApp, maps and Push adapters never report success when unconfigured.
+- Payment, WhatsApp and Push never report success when unconfigured. The map provider is server-controlled; OpenStreetMap is the reviewed V1 default and can be disabled without code.
 - Production sample data is disabled by default.
 
 ## Roles | الأدوار
@@ -31,38 +31,39 @@ Authorization is enforced in the Python domain layer. Hiding UI controls is not 
 
 ## Run locally | التشغيل المحلي
 
-Requirements: Python 3.12+ and, for UI tests, Node.js 20+.
+Requirements: Python 3.12+ and, for UI tests, Node.js 22+.
 
 ```powershell
-Copy-Item .env.example .env
+# The runtime reads process environment variables directly; .env.example is a template.
 $env:BISA_SEED_SAMPLE_DATA='true' # local demo only
+$env:BISA_DEMO_PIN = Read-Host 'Choose a local 4-8 digit demo PIN'
+python -m pip install -r requirements.txt
 python bisa_server.py
 ```
 
 Open [http://127.0.0.1:8080](http://127.0.0.1:8080).
 
-Local demo accounts exist only when `BISA_SEED_SAMPLE_DATA=true`:
+Opt-in demo fixtures exist only when `BISA_SEED_SAMPLE_DATA=true` and require a locally chosen `BISA_DEMO_PIN`; there is no runtime default PIN in source. The sample catalog contains tagged stores, products, bundles and advertisements for isolated local testing. Do not reuse a demo database or PIN in production. An authorized administrator can remove tagged demo records from **BISA Admin → Demo data** with the exact confirmation phrase shown in the interface; real records are not selected by that operation.
 
-- Shopper: `96890000001` / `1234`
-- Merchant (Mawaleh Daily): `96892000003` / `1234`
-
-The complete sample catalog contains 6 tagged demo stores across Muscat's wilayats, 24 products, 6 bundles and 6 advertisements. An authorized administrator can remove all tagged demo records from **BISA Admin → Demo data** by entering the exact confirmation phrase shown in the interface. Real records are not selected by that operation.
-
-The public phone showcase is deployed from `public/` to GitHub Pages. It demonstrates discovery, area filters, a one-store cart and the admin preview without pretending to submit a real order; transactional ordering requires the Python server.
+The browser shell uses the same origin for its API by default. Running `bisa_server.py` therefore serves the UI and transactional API together locally. `.github/workflows/pages.yml` is only an owner-triggered, manually confirmed static preview path; this repository does not claim that preview is currently published. A static preview cannot provide real ordering unless a separately approved backend, CORS policy and API origin are configured.
 
 Never enable sample seed against production storage.
 
 ## Quality gates | بوابات الجودة
 
 ```powershell
-python -m py_compile bisa_config.py bisa_domain.py bisa_server.py scripts/create_bisa_admin.py
-python -m unittest tests.test_bisa_domain -v
+python -m pip install -r requirements.txt
+$bisaPython = Get-ChildItem -File bisa_*.py,scripts/*.py,tests/test_bisa*.py | Select-Object -ExpandProperty FullName
+python -m py_compile $bisaPython
+python -m unittest discover -s tests -p "test_bisa*.py" -v
+python scripts/verify_bisa.py
 npm ci
 npm audit --audit-level=high
+npx playwright install chromium
 npm run check:js
+npm run test:map
 npm run test:ui
 npm run test:performance
-python scripts/verify_bisa.py
 git diff --check
 ```
 
@@ -82,6 +83,8 @@ Then open `/?view=admin` and sign in. Merchant approval activates the store, pub
 - `bisa_domain.py` — schema, validation, authorization and commerce transactions.
 - `bisa_server.py` — bounded JSON API and strict static hosting surface.
 - `assets/scripts/bisa-app.js` — shopper, merchant and administrator presentation.
+- `assets/scripts/bisa-map.js` — bounded Leaflet branch map using server-approved provider configuration.
+- `bisa_moderation.py`, `bisa_merchant_launch.py`, `bisa_push.py` — authorized review receipts, branch launch lifecycle and role-scoped Web Push outbox.
 - `assets/styles/bisa.css` — responsive RTL/LTR design system.
 - `public/` — verified mirrors for static hosting.
 - `tests/` — price, plans, cart, order, authorization and responsive browser tests.
@@ -91,6 +94,6 @@ Detailed notes: [architecture](docs/ARCHITECTURE.md), [product](docs/PRODUCT.md)
 
 ## Production status
 
-The repository is ready for review and local/staging evaluation. It is **not publicly deployed by this repository**. Production requires explicit owner approval plus persistent storage, real domain/CORS settings, backups, monitoring, and any selected payment/WhatsApp/maps/Push vendors.
+The repository is ready for review and local evaluation. It is **not publicly deployed by this repository**. Production additionally requires an explicit owner-approved stable release, durable BISA-only storage, real domain/CORS settings, tested backups and monitoring. Phone onboarding remains invite-only until a real verification flow exists. Payment and WhatsApp remain unavailable until real adapters are implemented; Push requires a valid VAPID credential set and a live-device acceptance test. OpenStreetMap is selected for the V1 branch map under its official tile policy, with visible attribution, no automatic GPS request and no offline tile prefetch; the owner can disable it from Admin settings.
 
 Copyright © 2026 BISA. All rights reserved.

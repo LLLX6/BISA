@@ -26,7 +26,7 @@ def main():
         if row:
             con.execute("UPDATE accounts SET name=?,pin_hash=?,status='active' WHERE id=?", (name, hash_secret(pin), account_id))
         else:
-            con.execute("INSERT INTO accounts VALUES(?,?,?,?,?,?)", (account_id, phone, name, hash_secret(pin), "active", now_iso()))
+            con.execute("INSERT INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES(?,?,?,?,?,?)", (account_id, phone, name, hash_secret(pin), "active", now_iso()))
         con.execute("INSERT INTO account_roles(account_id,role,merchant_id,active) VALUES(?,?, '',1) ON CONFLICT(account_id,role,merchant_id) DO UPDATE SET active=1", (account_id, role))
     print(f"BISA {role} provisioned: {account_id}")
 

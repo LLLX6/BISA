@@ -1,19 +1,57 @@
-name: Build BISA source archive
+name: Build verified BISA source archive
 
 on:
   workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Type BUILD_BISA_SOURCE_ARCHIVE"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   archive:
+    if: ${{ inputs.confirmation == 'BUILD_BISA_SOURCE_ARCHIVE' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
-      - run: zip -r bisa-source-${{ github.sha }}.zip . -x '.git/*' 'node_modules/*' 'data-bisa/*' '.env'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install BISA Python dependencies
+        run: python -m pip install -r requirements.txt
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check:js
+      - run: npm run test:map
+      - run: npm run test:ui
+      - run: npm run test:performance
+      - run: python -m unittest discover -s tests -p "test_bisa*.py" -v
+      - run: python scripts/verify_bisa.py
+      - name: Read archive metadata
+        id: metadata
+        shell: bash
+        run: |
+          node -e "process.stdout.write('version=' + require('./package.json').version + '\n')" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Build tracked-source archive
+        run: >-
+          git archive --format=zip
+          --prefix="bisa-${{ steps.metadata.outputs.version }}/"
+          --output="bisa-source-v${{ steps.metadata.outputs.version }}-${{ steps.metadata.outputs.short_sha }}.zip"
+          HEAD
       - uses: actions/upload-artifact@v4
         with:
-          name: bisa-source-${{ github.sha }}
-          path: bisa-source-${{ github.sha }}.zip
+          name: bisa-source-v${{ steps.metadata.outputs.version }}-${{ steps.metadata.outputs.short_sha }}
+          path: bisa-source-v${{ steps.metadata.outputs.version }}-${{ steps.metadata.outputs.short_sha }}.zip
+          if-no-files-found: error
           retention-days: 14

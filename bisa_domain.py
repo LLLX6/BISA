@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import sqlite3
 import uuid
@@ -16,10 +17,12 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
+import bisa_config
 from bisa_config import (
     DB_PATH, PRODUCT_MAX_BAISA, PRODUCT_MIN_BAISA, SEED_SAMPLE_DATA,
     SESSION_TTL_HOURS, ensure_runtime_directories,
 )
+from bisa_migrations import apply_migrations
 
 
 class DomainError(Exception):
@@ -87,9 +90,12 @@ def verify_secret(value: str, encoded: str) -> bool:
 def to_baisa(value) -> int:
     """Convert OMR decimal input to integer baisa without binary float errors."""
     try:
-        amount = Decimal(str(value)).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
+        raw_amount = Decimal(str(value))
+        amount = raw_amount.quantize(Decimal("0.001"), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError, TypeError):
         raise DomainError("valid_price_required")
+    if not raw_amount.is_finite() or raw_amount != amount:
+        raise DomainError("price_precision_invalid", 422, {"maximumDecimalPlaces": 3})
     return int(amount * 1000)
 
 
@@ -278,13 +284,27 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs(
 """
 
 
+BASIC_ENTITLEMENTS = {
+    "products": 400, "branches": 2, "staff": 2, "bundles": 8,
+    "mediaPerProduct": 5, "mediaTotalMb": 2048, "analytics": "basic",
+    "bulkImport": False, "supplierHub": True, "canBuyAds": True,
+    "includedAdCredits": 0, "includedBoosts": 0, "boostDurationDays": 0,
+    "supportTier": "standard", "gracePeriodDays": 7,
+}
+ADVANCED_ENTITLEMENTS = {
+    "products": 900, "branches": 5, "staff": 6, "bundles": 25,
+    "mediaPerProduct": 10, "mediaTotalMb": 8192, "analytics": "advanced",
+    "bulkImport": True, "supplierHub": True, "canBuyAds": True,
+    "includedAdCredits": 3, "includedBoosts": 3, "boostDurationDays": 7,
+    "supportTier": "priority", "gracePeriodDays": 14,
+}
 PLAN_DEFAULTS = {
     "early_trial": {"name_ar": "التجريبية — أول المنضمين", "name_en": "Early trial", "price": 0, "duration": 90,
-        "entitlements": {"inherits": "basic_3m", "products": 400, "branches": 2, "staff": 2, "bundles": 8, "analytics": "basic", "supplierHub": True}},
+        "entitlements": {"inherits": "basic_3m"}},
     "basic_3m": {"name_ar": "الأساسية", "name_en": "Basic", "price": 40000, "duration": 90,
-        "entitlements": {"products": 400, "branches": 2, "staff": 2, "bundles": 8, "analytics": "basic", "supplierHub": True}},
+        "entitlements": BASIC_ENTITLEMENTS},
     "advanced_3m": {"name_ar": "المتقدمة", "name_en": "Advanced", "price": 60000, "duration": 90,
-        "entitlements": {"products": 900, "branches": 5, "staff": 6, "bundles": 25, "analytics": "advanced", "bulkImport": True, "supplierHub": True, "includedBoosts": 3}},
+        "entitlements": ADVANCED_ENTITLEMENTS},
 }
 
 
@@ -311,7 +331,8 @@ def init_db() -> None:
     with connect(immediate=True) as con:
         con.executescript(SCHEMA)
         stamp = now_iso()
-        con.execute("INSERT OR IGNORE INTO schema_migrations VALUES('001','BISA local commerce foundation',?)", (stamp,))
+        con.execute("INSERT OR IGNORE INTO schema_migrations(version,description,applied_at) VALUES('001','BISA local commerce foundation',?)", (stamp,))
+        apply_migrations(con, stamp)
         con.execute("INSERT OR IGNORE INTO locations VALUES(?,?,?,?,?,?,?,?)",
                     ("oman", "", "country", "عُمان", "Oman", 0, 1, stamp))
         con.execute("INSERT OR IGNORE INTO locations VALUES(?,?,?,?,?,?,?,?)",
@@ -330,12 +351,58 @@ def init_db() -> None:
         defaults = {
             "commissionRate": 0, "bundleMaxComponents": 10, "merchantResponseHours": 4,
             "inventoryCadenceHours": 24, "inventoryReminderLeadHours": 3,
-            "inventoryEnforcement": "mark_stale", "trialEnabled": True,
+            "inventoryGraceHours": 6, "inventoryEnforcement": "mark_stale", "trialEnabled": True,
             "trialCutoffAt": "", "trialFirstApprovedMerchants": 100,
             "paymentsEnabled": False, "whatsappEnabled": False,
+            "catalogPageSize": 24, "catalogMaxPageSize": 60,
+            "mapProvider": "openstreetmap", "defaultGovernorate": "muscat_governorate",
+            "priceBands": [
+                {"key":"100_250","minimumBaisa":100,"maximumBaisa":250},
+                {"key":"under_500","minimumBaisa":100,"maximumBaisa":499},
+                {"key":"under_1_omr","minimumBaisa":100,"maximumBaisa":999},
+                {"key":"1_2_omr","minimumBaisa":1000,"maximumBaisa":2000},
+            ],
+            "homeFeedModules": [
+                "hero", "price_filters", "categories", "arrived_today", "worth_it",
+                "nearby", "bundles", "office_delivery", "home_delivery", "free_delivery",
+                "area_stores", "new_stores", "featured_campaigns",
+            ],
         }
         for key, value in defaults.items():
-            con.execute("INSERT OR IGNORE INTO platform_settings VALUES(?,?,?)", (key, dumps(value), stamp))
+            con.execute("""INSERT OR IGNORE INTO platform_settings(key,value_json,updated_at)
+                VALUES(?,?,?)""", (key, dumps(value), stamp))
+        for key in (
+            "online_payments", "whatsapp_notifications", "push_campaigns", "product_video",
+            "barcode_catalog", "bulk_catalog_import", "recommendations", "loyalty",
+            "platform_commission", "multi_city", "pos_integrations",
+        ):
+            con.execute("""INSERT OR IGNORE INTO feature_flags
+                (key,enabled,rollout_percent,audiences_json,config_json,updated_at)
+                VALUES(?,0,0,'[]','{}',?)""", (key, stamp))
+        placements = (
+            ("home_hero", "واجهة الرئيسية", "Home hero", 1, 3),
+            ("home_inline", "داخل الرئيسية", "Home inline", 1, 3),
+            ("area_banner", "واجهة المنطقة", "Area banner", 1, 3),
+            ("category_banner", "واجهة القسم", "Category banner", 1, 3),
+            ("promoted_store", "متجر مميز", "Promoted store", 4, 4),
+            ("promoted_product", "منتج مميز", "Promoted product", 8, 4),
+            ("search_promoted", "نتيجة بحث مميزة", "Promoted search", 3, 3),
+            ("promoted_bundle", "باقة مميزة", "Promoted bundle", 4, 4),
+        )
+        for key, name_ar, name_en, maximum, frequency in placements:
+            con.execute("""INSERT OR IGNORE INTO ad_placements
+                (key,name_ar,name_en,max_active,frequency_cap,enabled,config_json,updated_at)
+                VALUES(?,?,?,?,?,1,'{}',?)""", (key,name_ar,name_en,maximum,frequency,stamp))
+        templates = (
+            ("merchant_application_submitted", "طلب متجر جديد", "New merchant application", "يوجد طلب متجر بانتظار المراجعة", "A merchant application is waiting for review"),
+            ("order_confirmation_required", "طلب جديد", "New order", "أكد توفر المنتجات قبل انتهاء المهلة", "Confirm availability before the deadline"),
+            ("inventory_audit_due", "تأكيد مخزون اليوم", "Today's stock check", "راجع الاستثناءات ثم أكد بقية الكتالوج", "Review exceptions, then confirm the remaining catalog"),
+            ("subscription_expiring", "اشتراكك يقترب من الانتهاء", "Subscription expiring", "راجع باقتك قبل نهاية المدة", "Review your plan before it expires"),
+        )
+        for key, title_ar, title_en, body_ar, body_en in templates:
+            con.execute("""INSERT OR IGNORE INTO notification_templates
+                (key,title_ar,title_en,body_ar,body_en,enabled,updated_at)
+                VALUES(?,?,?,?,?,1,?)""", (key,title_ar,title_en,body_ar,body_en,stamp))
         if SEED_SAMPLE_DATA:
             seed_demo(con)
 
@@ -343,12 +410,17 @@ def init_db() -> None:
 def seed_demo(con) -> None:
     """Create clearly tagged showcase data across all six Muscat wilayats."""
     stamp = now_iso()
+    demo_pin = os.environ.get("BISA_DEMO_PIN", "").strip()
+    if len(demo_pin) < 4 or len(demo_pin) > 8 or not demo_pin.isdigit():
+        raise RuntimeError(
+            "BISA_DEMO_PIN must be supplied as 4-8 digits when sample data is enabled"
+        )
 
     def mark(kind: str, entity_id: str) -> None:
         con.execute("INSERT OR IGNORE INTO demo_records VALUES(?,?,?)", (kind, entity_id, stamp))
 
     shopper = "demo_account_shopper"
-    con.execute("INSERT OR IGNORE INTO accounts VALUES(?,?,?,?,?,?)", (shopper, "96890000001", "متسوق بيسا التجريبي", hash_secret("1234"), "active", stamp))
+    con.execute("INSERT OR IGNORE INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES(?,?,?,?,?,?)", (shopper, "96890000001", "متسوق بيسا التجريبي", hash_secret(demo_pin), "active", stamp))
     con.execute("INSERT OR IGNORE INTO account_roles VALUES(?,?,?,1)", (shopper, "shopper", ""))
     mark("account", shopper)
 
@@ -362,19 +434,27 @@ def seed_demo(con) -> None:
     ]
     templates = [
         ("storage", "منظم يومي", "Daily organizer", 1300),
-        ("kitchen", "أكواب ملوّنة", "Color cups", 500),
-        ("stationery", "دفتر جيب", "Pocket notebook", 250),
-        ("cleaning", "إسفنجة عملية", "Handy sponge", 100),
+        ("kitchen", "طقم أدوات مطبخ", "Kitchen utensil set", 500),
+        ("stationery", "طقم قرطاسية", "Stationery set", 250),
+        ("cleaning", "منظم صغير", "Compact organizer", 100),
         ("snacks", "مكسرات مختارة", "Selected nuts", 1900),
-        ("party", "زينة صغيرة", "Mini party decor", 2000),
+        ("party", "طقم حفلة صغير", "Mini party set", 2000),
     ]
+    sample_media = {
+        "storage": "/assets/images/catalog/product-organizer-v1.webp",
+        "kitchen": "/assets/images/catalog/product-kitchen-v1.webp",
+        "stationery": "/assets/images/catalog/product-stationery-v1.webp",
+        "cleaning": "/assets/images/catalog/product-organizer-v1.webp",
+        "snacks": "/assets/images/catalog/product-nuts-v1.webp",
+        "party": "/assets/images/catalog/product-stationery-v1.webp",
+    }
     for order, (key, area_ar, area_en, store_ar, store_en, lat, lng, icon) in enumerate(showcases):
         account_id = f"demo_account_{key}"
         merchant_id = f"demo_merchant_{key}"
         area_id = f"demo_area_{key}"
         branch_id = f"demo_branch_{key}"
         policy_id = f"demo_policy_{key}"
-        con.execute("INSERT OR IGNORE INTO accounts VALUES(?,?,?,?,?,?)", (account_id, f"96892{order:06d}", f"مالك {store_ar}", hash_secret("1234"), "active", stamp))
+        con.execute("INSERT OR IGNORE INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES(?,?,?,?,?,?)", (account_id, f"96892{order:06d}", f"مالك {store_ar}", hash_secret(demo_pin), "active", stamp))
         con.execute("INSERT OR IGNORE INTO account_roles VALUES(?,?,?,1)", (account_id, "merchant_owner", merchant_id))
         con.execute("INSERT OR IGNORE INTO locations VALUES(?,?,?,?,?,?,?,?)", (area_id, f"wilayat_{key}", "area", area_ar, area_en, order + 1, 1, stamp))
         con.execute("""INSERT OR IGNORE INTO merchants
@@ -401,8 +481,10 @@ def seed_demo(con) -> None:
             con.execute("""INSERT OR IGNORE INTO products
                 (id,merchant_id,category_id,name_ar,name_en,description_ar,description_en,price_baisa,images_json,status,active,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,?,?,'approved',1,?,?)""",
-                (product_id, merchant_id, category, name_ar, name_en, f"{icon} اكتشاف تجريبي في {area_ar}", f"{icon} Demo discovery in {area_en}", price, "[]", stamp, stamp))
-            con.execute("INSERT OR IGNORE INTO product_branch_inventory VALUES(?,?,'tracked',25,'in_stock',?,'',1,?)", (product_id, branch_id, stamp, stamp))
+                (product_id, merchant_id, category, name_ar, name_en, f"اكتشاف تجريبي في {area_ar}", f"Demo discovery in {area_en}", price, dumps([sample_media[category]]), stamp, stamp))
+            con.execute("""INSERT OR IGNORE INTO product_branch_inventory
+                (product_id,branch_id,stock_mode,quantity,availability,last_stock_verified_at,stale_at,active,updated_at)
+                VALUES(?,?,'tracked',25,'in_stock',?,'',1,?)""", (product_id, branch_id, stamp, stamp))
             mark("product", product_id)
         bundle_id = f"demo_bundle_{key}"
         con.execute("""INSERT OR IGNORE INTO bundles
@@ -410,7 +492,7 @@ def seed_demo(con) -> None:
             VALUES(?,?,?,?,?,'باقة تجريبية مختارة',3100,'approved',?,?)""", (bundle_id, merchant_id, branch_id, f"باقة {area_ar}", f"{area_en} Bundle", stamp, stamp))
         con.executemany("INSERT OR IGNORE INTO bundle_items VALUES(?,?,?)", [(bundle_id, product_ids[0], 1), (bundle_id, product_ids[1], 2)])
         campaign_id = f"demo_ad_{key}"
-        creative = {"areaId": area_id, "titleAr": f"اكتشف {store_ar}", "titleEn": f"Discover {store_en}", "bodyAr": f"اختيارات اليوم في {area_ar}", "bodyEn": f"Today's picks in {area_en}", "icon": icon}
+        creative = {"areaId": area_id, "titleAr": f"اكتشف {store_ar}", "titleEn": f"Discover {store_en}", "bodyAr": f"اختيارات اليوم في {area_ar}", "bodyEn": f"Today's picks in {area_en}", "image": "/assets/images/bisa-hero-v1.webp"}
         con.execute("""INSERT OR IGNORE INTO ad_campaigns
             (id,owner_kind,owner_id,placement,target_json,landing_kind,landing_id,label_ar,label_en,status,frequency_cap,created_at,updated_at)
             VALUES(?,'merchant',?,'home_hero',?,'store',?,'إعلان تجريبي','Demo sponsored','approved',3,?,?)""",
@@ -427,12 +509,23 @@ def settings(con) -> dict:
     return {r["key"]: loads(r["value_json"], None) for r in con.execute("SELECT * FROM platform_settings")}
 
 
+def resolve_entitlements(con, value) -> dict:
+    entitlements = loads(value, {}) if not isinstance(value, dict) else dict(value)
+    parent = entitlements.pop("inherits", "")
+    if parent:
+        row = con.execute("SELECT entitlements FROM subscription_plans WHERE id=? AND active=1", (parent,)).fetchone()
+        if not row:
+            raise DomainError("inherited_plan_unavailable", 409)
+        return {**resolve_entitlements(con, row["entitlements"]), **entitlements}
+    return entitlements
+
+
 def active_plan(con, merchant_id: str) -> dict:
     row = con.execute("""SELECT p.* FROM merchant_subscriptions s JOIN subscription_plans p ON p.id=s.plan_id
         WHERE s.merchant_id=? AND s.status='active' AND s.ends_at>? ORDER BY s.ends_at DESC LIMIT 1""", (merchant_id, now_iso())).fetchone()
     if not row:
         raise DomainError("active_plan_required", 403)
-    data = rowdict(row); data["entitlements"] = loads(data["entitlements"], {})
+    data = rowdict(row); data["entitlements"] = resolve_entitlements(con, data["entitlements"])
     return data
 
 
@@ -448,20 +541,34 @@ def authenticate(token: str) -> dict | None:
         return None
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     with connect() as con:
-        row = con.execute("""SELECT s.*,a.name,a.status FROM sessions s JOIN accounts a ON a.id=s.account_id
-            WHERE s.token_hash=? AND s.revoked_at='' AND s.expires_at>? AND a.status='active'""", (token_hash, now_iso())).fetchone()
+        row = con.execute("""SELECT s.*,a.name,a.status FROM sessions s
+            JOIN accounts a ON a.id=s.account_id
+            JOIN account_roles r ON r.account_id=s.account_id AND r.role=s.active_role
+                AND r.merchant_id=s.merchant_id AND r.active=1
+            LEFT JOIN merchants m ON m.id=s.merchant_id
+            WHERE s.token_hash=? AND s.revoked_at='' AND s.expires_at>? AND a.status='active'
+              AND (s.active_role NOT LIKE 'merchant_%' OR m.status='approved')""",
+            (token_hash, now_iso())).fetchone()
         if not row:
             return None
         return {"accountId": row["account_id"], "name": row["name"], "role": row["active_role"], "merchantId": row["merchant_id"]}
 
 
-def register_or_login(phone, pin, name="", role="shopper") -> dict:
+LOGIN_ROLES = {
+    "shopper", "merchant_owner", "merchant_manager", "merchant_staff",
+    "supplier_advertiser", "support_admin", "catalog_moderator",
+    "merchant_reviewer", "finance", "advertising_manager", "admin", "super_admin",
+}
+
+
+def verify_or_register_account(phone, pin, name="", role="shopper") -> dict:
+    """Verify credentials and the requested active role without issuing a session."""
     phone = normalize_phone(phone)
     pin = str(pin or "")
     if len(pin) < 4 or len(pin) > 8 or not pin.isdigit():
         raise DomainError("valid_pin_required")
-    allowed_roles = {"shopper", "merchant_owner", "merchant_manager", "merchant_staff", "support_admin", "admin", "super_admin"}
-    if role not in allowed_roles:
+    role = clean_text(role, 40) or "shopper"
+    if role not in LOGIN_ROLES:
         raise DomainError("invalid_role")
     with connect(immediate=True) as con:
         row = con.execute("SELECT * FROM accounts WHERE phone=?", (phone,)).fetchone()
@@ -470,14 +577,17 @@ def register_or_login(phone, pin, name="", role="shopper") -> dict:
                 raise DomainError("invalid_login", 403)
             account_id = row["id"]
         elif role == "shopper":
+            if bisa_config.PHONE_VERIFICATION_MODE != "development_bypass":
+                raise DomainError("phone_verification_required", 403)
             account_id = new_id("acct")
-            con.execute("INSERT INTO accounts VALUES(?,?,?,?,?,?)", (account_id, phone, clean_text(name, 80) or "BISA", hash_secret(pin), "active", now_iso()))
+            con.execute("INSERT INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES(?,?,?,?,?,?)", (account_id, phone, clean_text(name, 80) or "BISA", hash_secret(pin), "active", now_iso()))
         else:
             # Privileged and merchant roles are provisioned only by an approved workflow.
             raise DomainError("invalid_login", 403)
         role_row = con.execute("SELECT merchant_id FROM account_roles WHERE account_id=? AND role=? AND active=1", (account_id, role)).fetchone()
         if not role_row and role == "shopper":
-            con.execute("INSERT INTO account_roles VALUES(?,?,?,1)", (account_id, role, ""))
+            con.execute("""INSERT INTO account_roles(account_id,role,merchant_id,active)
+                VALUES(?,?,?,1)""", (account_id, role, ""))
             merchant_id = ""
         elif role_row:
             merchant_id = role_row["merchant_id"]
@@ -485,18 +595,35 @@ def register_or_login(phone, pin, name="", role="shopper") -> dict:
             raise DomainError("merchant_application_required", 403)
         else:
             raise DomainError("invalid_login", 403)
+        return {
+            "accountId": account_id,
+            "name": row["name"] if row else clean_text(name, 80) or "BISA",
+            "role": role,
+            "merchantId": merchant_id,
+        }
+
+
+def register_or_login(phone, pin, name="", role="shopper") -> dict:
+    """Backward-compatible session entry point; the HTTP API uses secure sessions."""
+    actor = verify_or_register_account(phone, pin, name, role)
+    with connect(immediate=True) as con:
         token = secrets.token_urlsafe(36)
-        con.execute("INSERT INTO sessions VALUES(?,?,?,?,?,?,?)", (
-            hashlib.sha256(token.encode()).hexdigest(), account_id, role, merchant_id,
+        con.execute("""INSERT INTO sessions
+            (token_hash,account_id,active_role,merchant_id,expires_at,revoked_at,created_at)
+            VALUES(?,?,?,?,?,?,?)""", (
+            hashlib.sha256(token.encode()).hexdigest(), actor["accountId"], actor["role"], actor["merchantId"],
             (datetime.now(UTC)+timedelta(hours=SESSION_TTL_HOURS)).isoformat(), "", now_iso()))
-        return {"token": token, "account": {"id": account_id, "name": row["name"] if row else clean_text(name, 80) or "BISA", "role": role, "merchantId": merchant_id}}
+        return {"token": token, "account": {"id": actor["accountId"], "name": actor["name"], "role": actor["role"], "merchantId": actor["merchantId"]}}
 
 
 class BisaService:
     def public_bootstrap(self, actor=None) -> dict:
         with connect() as con:
             location_rows = con.execute("""SELECT l.* FROM locations l WHERE l.active=1 AND (
-                l.kind!='area' OR EXISTS(SELECT 1 FROM store_branches b WHERE b.area_id=l.id AND b.status='approved' AND b.active=1 AND b.public_visible=1))
+                l.kind!='area' OR EXISTS(SELECT 1 FROM store_branches b
+                    JOIN merchants m ON m.id=b.merchant_id
+                    WHERE b.area_id=l.id AND b.status='approved' AND b.active=1
+                      AND b.public_visible=1 AND m.status='approved'))
                 ORDER BY l.kind,l.sort_order,l.name_en""").fetchall()
             categories = [rowdict(r) for r in con.execute("SELECT * FROM product_categories WHERE active=1 ORDER BY sort_order")]
             stores = self._stores(con)
@@ -505,7 +632,7 @@ class BisaService:
             advertisements = self._advertisements(con)
             plans = []
             if actor and actor.get("role") in {"merchant_owner", "merchant_manager", "merchant_staff", "admin", "super_admin"}:
-                plans = [self._plan(r) for r in con.execute("SELECT * FROM subscription_plans WHERE active=1 ORDER BY sort_order")]
+                plans = [self._plan(r, con) for r in con.execute("SELECT * FROM subscription_plans WHERE active=1 ORDER BY sort_order")]
             cart = self._cart(con, actor["accountId"]) if actor and actor.get("role") == "shopper" else None
             orders = []
             notifications = []
@@ -581,13 +708,48 @@ class BisaService:
         return output
 
     def _advertisements(self, con) -> list:
+        stamp = now_iso()
         rows = con.execute("""SELECT a.id,a.owner_id,a.placement,a.target_json,a.landing_kind,a.landing_id,
-            a.label_ar,a.label_en,m.name_ar merchant_name_ar,m.name_en merchant_name_en,b.area_id
-            FROM ad_campaigns a JOIN merchants m ON m.id=a.owner_id
-            JOIN store_branches b ON b.id=a.landing_id
-            WHERE a.status='approved' AND m.status='approved' AND b.status='approved' AND b.active=1 AND b.public_visible=1
+            a.label_ar,a.label_en,m.name_ar merchant_name_ar,m.name_en merchant_name_en,
+            CASE a.landing_kind
+              WHEN 'store' THEN (SELECT sb.area_id FROM store_branches sb WHERE sb.id=a.landing_id LIMIT 1)
+              WHEN 'product' THEN (SELECT pb.area_id FROM products pp
+                    JOIN product_branch_inventory pi ON pi.product_id=pp.id
+                    JOIN store_branches pb ON pb.id=pi.branch_id AND pb.merchant_id=pp.merchant_id
+                    WHERE pp.id=a.landing_id AND pp.merchant_id=a.owner_id
+                      AND pp.status='approved' AND pp.active=1 AND pp.moderation_status='approved'
+                      AND pp.archived_at='' AND pi.active=1
+                      AND NOT (pi.freshness_status='stale' AND pi.stale_enforcement IN('hide_stale','pause_stale'))
+                      AND pb.status='approved' AND pb.active=1 AND pb.public_visible=1
+                    ORDER BY pb.id LIMIT 1)
+              WHEN 'bundle' THEN (SELECT bb.area_id FROM bundles bu
+                    JOIN store_branches bb ON bb.id=bu.branch_id AND bb.merchant_id=bu.merchant_id
+                    WHERE bu.id=a.landing_id AND bu.merchant_id=a.owner_id
+                      AND bu.status='approved' AND bu.moderation_status='approved'
+                      AND bb.status='approved' AND bb.active=1 AND bb.public_visible=1 LIMIT 1)
+            END area_id
+            FROM ad_campaigns a JOIN merchants m ON m.id=a.owner_id AND a.owner_kind='merchant'
+            WHERE a.status='approved' AND m.status='approved' AND m.active=1
               AND (a.starts_at='' OR a.starts_at<=?) AND (a.ends_at='' OR a.ends_at>?)
-            ORDER BY a.created_at DESC LIMIT 50""", (now_iso(), now_iso())).fetchall()
+              AND (
+                (a.landing_kind='store' AND EXISTS(
+                  SELECT 1 FROM store_branches sb WHERE sb.id=a.landing_id AND sb.merchant_id=a.owner_id
+                    AND sb.status='approved' AND sb.active=1 AND sb.public_visible=1))
+                OR (a.landing_kind='product' AND EXISTS(
+                  SELECT 1 FROM products pp JOIN product_branch_inventory pi ON pi.product_id=pp.id
+                  JOIN store_branches pb ON pb.id=pi.branch_id AND pb.merchant_id=pp.merchant_id
+                  WHERE pp.id=a.landing_id AND pp.merchant_id=a.owner_id
+                    AND pp.status='approved' AND pp.active=1 AND pp.moderation_status='approved'
+                    AND pp.archived_at='' AND pi.active=1
+                    AND NOT (pi.freshness_status='stale' AND pi.stale_enforcement IN('hide_stale','pause_stale'))
+                    AND pb.status='approved' AND pb.active=1 AND pb.public_visible=1))
+                OR (a.landing_kind='bundle' AND EXISTS(
+                  SELECT 1 FROM bundles bu JOIN store_branches bb ON bb.id=bu.branch_id AND bb.merchant_id=bu.merchant_id
+                  WHERE bu.id=a.landing_id AND bu.merchant_id=a.owner_id
+                    AND bu.status='approved' AND bu.moderation_status='approved'
+                    AND bb.status='approved' AND bb.active=1 AND bb.public_visible=1))
+              )
+            ORDER BY a.created_at DESC LIMIT 50""", (stamp, stamp)).fetchall()
         output=[]
         for row in rows:
             item=dict(row); item["creative"]=loads(item.pop("target_json"),{}); output.append(item)
@@ -617,7 +779,8 @@ class BisaService:
             con.execute("""INSERT INTO store_branches(id,merchant_id,name_ar,name_en,wilayah_id,area_id,address_text,status,active,public_visible,created_at,updated_at)
                 VALUES(?,?,?,?,?,?,?,'submitted',1,0,?,?)""",(branch_id,merchant_id,name_ar,name_en,wilayah,area,clean_text(payload.get("address"),240),stamp,stamp))
             con.execute("INSERT INTO account_roles VALUES(?,?,?,0)",(actor["accountId"],"merchant_owner",merchant_id))
-            con.execute("INSERT INTO notifications VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(new_id("ntf"),"admin","admin","طلب متجر جديد","New merchant application",f"{name_ar} — مراجعة الطلب",f"{name_en} — review application",f"admin:merchant-application:{app_id}",1,f"merchant-application:{app_id}","","",stamp))
+            con.execute("""INSERT INTO notifications(id,target_kind,target_id,title_ar,title_en,body_ar,body_en,route,requires_action,dedupe_key,read_at,acted_at,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(new_id("ntf"),"admin","admin","طلب متجر جديد","New merchant application",f"{name_ar} — مراجعة الطلب",f"{name_en} — review application",f"admin:merchant-application:{app_id}",1,f"merchant-application:{app_id}","","",stamp))
             con.execute("INSERT INTO admin_audit_logs VALUES(?,?,?,?,?,?,?,?,?)",(new_id("audit"),actor["accountId"],"merchant_application_submitted","merchant_application",app_id,"{}",dumps({"merchantId":merchant_id,"branchId":branch_id}),"",stamp))
         return {"id":app_id,"merchantId":merchant_id,"branchId":branch_id,"status":"submitted","whatsappSent":False}
 
@@ -659,7 +822,7 @@ class BisaService:
                 con.execute("UPDATE store_branches SET status='rejected',public_visible=0,updated_at=? WHERE merchant_id=?", (stamp, row["merchant_id"]))
                 title_ar, title_en = "تحديث طلب المتجر", "Merchant application update"
                 body_ar, body_en = note or "تعذر اعتماد الطلب حالياً", note or "The application could not be approved"
-            con.execute("INSERT INTO notifications VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            con.execute("""INSERT INTO notifications(id,target_kind,target_id,title_ar,title_en,body_ar,body_en,route,requires_action,dedupe_key,read_at,acted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (new_id("ntf"), "account", row["owner_account_id"], title_ar, title_en, body_ar, body_en,
                  "shopper:merchant-application", 0, f"merchant-application:{application_id}:{status}", "", "", stamp))
             con.execute("INSERT INTO admin_audit_logs VALUES(?,?,?,?,?,?,?,?,?)",
@@ -667,8 +830,16 @@ class BisaService:
                  application_id, dumps({"status": row["status"]}), dumps({"status": status}), note, stamp))
             return {"id": application_id, "merchantId": row["merchant_id"], "status": status, "duplicate": False}
 
-    def _plan(self,row):
-        data=dict(row); data["price"]=omr(data.pop("price_baisa")); data["entitlements"]=loads(data["entitlements"],{}); return data
+    def _plan(self, row, con=None):
+        data = dict(row)
+        data["price"] = omr(data.pop("price_baisa"))
+        raw_entitlements = data["entitlements"]
+        data["entitlements"] = (
+            resolve_entitlements(con, raw_entitlements)
+            if con is not None
+            else (dict(raw_entitlements) if isinstance(raw_entitlements, dict) else loads(raw_entitlements, {}))
+        )
+        return data
 
     def merchant_dashboard(self, actor) -> dict:
         require_role(actor,"merchant_owner","merchant_manager","merchant_staff")
@@ -692,17 +863,29 @@ class BisaService:
         stamp=now_iso(); quantity=max(0,min(1_000_000,int(payload.get("quantity",0) or 0)))
         with connect(immediate=True) as con:
             plan=active_plan(con,mid); limit=int(plan["entitlements"].get("products",0))
+            global_existing=con.execute("SELECT merchant_id FROM products WHERE id=?",(pid,)).fetchone()
+            if global_existing and global_existing["merchant_id"] != mid:
+                raise DomainError("product_not_owned",403)
             existing=con.execute("SELECT * FROM products WHERE id=? AND merchant_id=?",(pid,mid)).fetchone()
             if not existing and con.execute("SELECT COUNT(*) n FROM products WHERE merchant_id=? AND active=1",(mid,)).fetchone()["n"]>=limit: raise DomainError("plan_product_limit",409,{"limit":limit})
             if not con.execute("SELECT 1 FROM store_branches WHERE id=? AND merchant_id=? AND active=1",(branch,mid)).fetchone(): raise DomainError("branch_not_owned",403)
             if not con.execute("SELECT 1 FROM product_categories WHERE id=? AND active=1",(category,)).fetchone(): raise DomainError("valid_category_required")
-            values=(pid,mid,category,clean_text(payload.get("nameAr"),120,True),clean_text(payload.get("nameEn"),120,True),clean_text(payload.get("descriptionAr"),500),clean_text(payload.get("descriptionEn"),500),price,clean_text(payload.get("unit"),40),clean_text(payload.get("barcode"),60),dumps(payload.get("images") or []),"approved",1,stamp,stamp)
-            con.execute("""INSERT INTO products VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-                category_id=excluded.category_id,name_ar=excluded.name_ar,name_en=excluded.name_en,description_ar=excluded.description_ar,
-                description_en=excluded.description_en,price_baisa=excluded.price_baisa,unit_text=excluded.unit_text,barcode=excluded.barcode,
-                images_json=excluded.images_json,updated_at=excluded.updated_at""",values)
+            product_values=(category,clean_text(payload.get("nameAr"),120,True),clean_text(payload.get("nameEn"),120,True),clean_text(payload.get("descriptionAr"),500),clean_text(payload.get("descriptionEn"),500),price,clean_text(payload.get("unit"),40),clean_text(payload.get("barcode"),60),dumps(payload.get("images") or []),stamp)
+            if existing:
+                updated=con.execute("""UPDATE products SET category_id=?,name_ar=?,name_en=?,description_ar=?,
+                    description_en=?,price_baisa=?,unit_text=?,barcode=?,images_json=?,updated_at=?
+                    WHERE id=? AND merchant_id=?""", product_values+(pid,mid)).rowcount
+                if updated != 1:
+                    raise DomainError("product_update_conflict",409)
+            else:
+                con.execute("""INSERT INTO products(id,merchant_id,category_id,name_ar,name_en,description_ar,
+                    description_en,price_baisa,unit_text,barcode,images_json,status,active,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,'approved',1,?,?)""",
+                    (pid,mid)+product_values[:-1]+(stamp,stamp))
             availability="in_stock" if quantity>2 else "low_stock" if quantity>0 else "out_of_stock"
-            con.execute("""INSERT INTO product_branch_inventory VALUES(?,?,'tracked',?,?,?,'',1,?)
+            con.execute("""INSERT INTO product_branch_inventory
+                (product_id,branch_id,stock_mode,quantity,availability,last_stock_verified_at,stale_at,active,updated_at)
+                VALUES(?,?,'tracked',?,?,?,'',1,?)
                 ON CONFLICT(product_id,branch_id) DO UPDATE SET quantity=excluded.quantity,availability=excluded.availability,updated_at=excluded.updated_at""",(pid,branch,quantity,availability,stamp,stamp))
         return {"id":pid,"price":omr(price),"quantity":quantity,"availability":availability}
 
@@ -726,8 +909,11 @@ class BisaService:
                 owned=con.execute("SELECT 1 FROM products p JOIN product_branch_inventory i ON i.product_id=p.id WHERE p.id=? AND p.merchant_id=? AND i.branch_id=?",(pid,mid,branch_id)).fetchone()
                 if not owned: raise DomainError("product_not_owned",403)
                 availability="in_stock" if quantity>2 else "low_stock" if quantity else "out_of_stock"
-                con.execute("UPDATE product_branch_inventory SET quantity=?,availability=?,last_stock_verified_at=?,stale_at='',updated_at=? WHERE product_id=? AND branch_id=?",(quantity,availability,stamp,stamp,pid,branch_id))
-            con.execute("UPDATE product_branch_inventory SET last_stock_verified_at=?,stale_at='',updated_at=? WHERE branch_id=? AND active=1",(stamp,stamp,branch_id))
+                con.execute("""UPDATE product_branch_inventory
+                    SET quantity=?,availability=?,last_stock_verified_at=?,stale_at='',
+                        freshness_status='fresh',stale_enforcement='',updated_at=?
+                    WHERE product_id=? AND branch_id=?""",
+                    (quantity,availability,stamp,stamp,pid,branch_id))
             audit_id=new_id("iaudit")
             con.execute("""INSERT INTO inventory_audits(
                 id,merchant_id,branch_id,status,due_at,confirmed_at,confirmed_by,summary,created_at)
@@ -753,7 +939,8 @@ class BisaService:
             selling=to_baisa(payload.get("price"))
             if selling<=0: raise DomainError("valid_bundle_price_required")
             bid=new_id("bundle"); stamp=now_iso()
-            con.execute("INSERT INTO bundles VALUES(?,?,?,?,?,?,?,'approved','','',?,?)",(bid,mid,branch,clean_text(payload.get("titleAr"),120,True),clean_text(payload.get("titleEn"),120,True),clean_text(payload.get("description"),500),selling,stamp,stamp))
+            con.execute("""INSERT INTO bundles(id,merchant_id,branch_id,title_ar,title_en,description,selling_price_baisa,status,starts_at,ends_at,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,'approved','','',?,?)""",(bid,mid,branch,clean_text(payload.get("titleAr"),120,True),clean_text(payload.get("titleEn"),120,True),clean_text(payload.get("description"),500),selling,stamp,stamp))
             con.executemany("INSERT INTO bundle_items VALUES(?,?,?)",[(bid,p,q) for p,q in normalized])
         return {"id":bid,"normalValue":omr(normal),"price":omr(selling),"saving":omr(max(0,normal-selling))}
 
@@ -770,12 +957,28 @@ class BisaService:
         kind=clean_text(payload.get("kind"),20) or "product"; item_id=clean_text(payload.get("itemId"),90,True); branch=clean_text(payload.get("branchId"),90,True); quantity=max(1,min(100,int(payload.get("quantity",1)))); replace=bool(payload.get("replaceCart"))
         if kind not in {"product","bundle"}: raise DomainError("invalid_cart_item_kind")
         with connect(immediate=True) as con:
-            if kind=="product": row=con.execute("SELECT p.merchant_id,p.price_baisa FROM products p JOIN product_branch_inventory i ON i.product_id=p.id WHERE p.id=? AND i.branch_id=? AND p.active=1 AND p.status='approved' AND i.active=1",(item_id,branch)).fetchone()
-            else: row=con.execute("SELECT merchant_id,selling_price_baisa price_baisa FROM bundles WHERE id=? AND branch_id=? AND status='approved'",(item_id,branch)).fetchone()
+            if kind=="product":
+                row=con.execute("""SELECT p.merchant_id,p.price_baisa FROM products p
+                    JOIN merchants m ON m.id=p.merchant_id
+                    JOIN product_branch_inventory i ON i.product_id=p.id
+                    JOIN store_branches b ON b.id=i.branch_id AND b.merchant_id=p.merchant_id
+                    WHERE p.id=? AND i.branch_id=? AND p.active=1 AND p.status='approved'
+                      AND p.moderation_status='approved' AND i.active=1
+                      AND (i.stock_mode!='tracked' OR i.quantity>0) AND i.availability!='out_of_stock'
+                      AND m.status='approved' AND b.status='approved' AND b.active=1 AND b.public_visible=1""",
+                    (item_id,branch)).fetchone()
+            else:
+                row=con.execute("""SELECT x.merchant_id,x.selling_price_baisa price_baisa FROM bundles x
+                    JOIN merchants m ON m.id=x.merchant_id
+                    JOIN store_branches b ON b.id=x.branch_id AND b.merchant_id=x.merchant_id
+                    WHERE x.id=? AND x.branch_id=? AND x.status='approved' AND x.moderation_status='approved'
+                      AND (x.starts_at='' OR x.starts_at<=?) AND (x.ends_at='' OR x.ends_at>?)
+                      AND m.status='approved' AND b.status='approved' AND b.active=1 AND b.public_visible=1""",
+                    (item_id,branch,now_iso(),now_iso())).fetchone()
             if not row: raise DomainError("item_not_available",404)
             merchant=row["merchant_id"]; cart=con.execute("SELECT * FROM carts WHERE account_id=? AND status='active'",(actor["accountId"],)).fetchone()
-            if cart and cart["merchant_id"]!=merchant:
-                if not replace: raise DomainError("cross_store_cart_confirmation_required",409,{"currentMerchantId":cart["merchant_id"],"newMerchantId":merchant})
+            if cart and (cart["merchant_id"]!=merchant or cart["branch_id"]!=branch):
+                if not replace: raise DomainError("cross_store_cart_confirmation_required",409,{"currentMerchantId":cart["merchant_id"],"newMerchantId":merchant,"currentBranchId":cart["branch_id"],"newBranchId":branch})
                 con.execute("UPDATE carts SET status='replaced',updated_at=? WHERE id=?",(now_iso(),cart["id"])); cart=None
             if not cart:
                 cid=new_id("cart"); con.execute("INSERT INTO carts VALUES(?,?,?,?, 'active',1,?)",(cid,actor["accountId"],merchant,branch,now_iso()))
@@ -825,11 +1028,11 @@ class BisaService:
             oid=new_id("order"); stamp=now_iso(); due=(datetime.now(UTC)+timedelta(hours=int(settings(con).get("merchantResponseHours",4)))).isoformat()
             con.execute("""INSERT INTO orders(
                 id,account_id,merchant_id,branch_id,status,fulfillment_mode,address_snapshot,policy_snapshot,
-                subtotal_baisa,delivery_fee_baisa,total_baisa,idempotency_key,response_due_at,created_at,updated_at)
-                VALUES(?,?,?,?,'pending_store_confirmation',?,?,?,?,?,?,?,?,?,?)""",
+                subtotal_baisa,delivery_fee_baisa,total_baisa,idempotency_key,response_due_at,created_at,updated_at,expires_at)
+                VALUES(?,?,?,?,'pending_store_confirmation',?,?,?,?,?,?,?,?,?,?,?)""",
                 (oid,actor["accountId"],cart["merchant_id"],cart["branch_id"],mode,
                  dumps(payload.get("address") or {}),dumps(dict(policy) if policy else {}),
-                 subtotal,fee,subtotal+fee,idem,due,stamp,stamp))
+                 subtotal,fee,subtotal+fee,idem,due,stamp,stamp,due))
             for item in cart["items"]:
                 if item["item_kind"]=="product":
                     product=con.execute("SELECT name_ar,name_en FROM products WHERE id=?",(item["item_id"],)).fetchone(); components=[{"productId":item["item_id"],"quantity":item["quantity"]}]
@@ -840,7 +1043,7 @@ class BisaService:
                 con.execute("INSERT INTO inventory_reservations VALUES(?,?,?,?,?,'pending',?)",
                     (new_id("res"),oid,product_id,cart["branch_id"],reserved_quantity,stamp))
             con.execute("UPDATE carts SET status='checked_out',updated_at=? WHERE id=?",(stamp,cart["id"]))
-            con.execute("INSERT INTO notifications VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(new_id("ntf"),"merchant",cart["merchant_id"],"طلب جديد","New order","أكد توفر المنتجات قبل انتهاء المهلة","Confirm stock before the deadline",f"merchant:order:{oid}",1,f"order:{oid}:confirm","","",stamp))
+            con.execute("""INSERT INTO notifications(id,target_kind,target_id,title_ar,title_en,body_ar,body_en,route,requires_action,dedupe_key,read_at,acted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(new_id("ntf"),"merchant",cart["merchant_id"],"طلب جديد","New order","أكد توفر المنتجات قبل انتهاء المهلة","Confirm stock before the deadline",f"merchant:order:{oid}",1,f"order:{oid}:confirm","","",stamp))
             return {"order":{"id":oid,"status":"pending_store_confirmation","subtotal":omr(subtotal),"deliveryFee":omr(fee),"total":omr(subtotal+fee),"responseDueAt":due},"duplicate":False}
 
     def decide_order(self, actor, order_id: str, decision: str) -> dict:
@@ -868,7 +1071,7 @@ class BisaService:
                 title_ar, title_en, body_ar, body_en = "أكد المتجر طلبك", "Store confirmed your order", "يمكنك متابعة طريقة الاستلام والموعد من طلباتك", "Track fulfillment and timing in your orders"
             else:
                 title_ar, title_en, body_ar, body_en = "تعذر تأكيد الطلب", "The order could not be confirmed", "لم تتوفر كل المنتجات ولم يتم تحصيل أي مبلغ", "Some items were unavailable and no payment was taken"
-            con.execute("INSERT INTO notifications VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (new_id("ntf"), "account", row["account_id"], title_ar, title_en, body_ar, body_en, f"shopper:order:{order_id}", 0, f"order:{order_id}:{status}", "", "", stamp))
+            con.execute("""INSERT INTO notifications(id,target_kind,target_id,title_ar,title_en,body_ar,body_en,route,requires_action,dedupe_key,read_at,acted_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (new_id("ntf"), "account", row["account_id"], title_ar, title_en, body_ar, body_en, f"shopper:order:{order_id}", 0, f"order:{order_id}:{status}", "", "", stamp))
             return {"id":order_id,"status":status,"duplicate":False}
 
     def supplier_campaigns(self, actor) -> list:
@@ -883,7 +1086,7 @@ class BisaService:
             return {"pendingApplications":[dict(r) for r in con.execute("SELECT * FROM merchant_applications WHERE status IN('submitted','under_review','changes_requested') ORDER BY submitted_at")],
                     "counts":{table:con.execute(f"SELECT COUNT(*) n FROM {table}").fetchone()["n"] for table in ("merchants","store_branches","products","orders","ad_campaigns","suppliers")},
                     "demoCounts":{r["entity_kind"]:r["n"] for r in con.execute("SELECT entity_kind,COUNT(*) n FROM demo_records GROUP BY entity_kind")},
-                    "settings":settings(con),"plans":[self._plan(r) for r in con.execute("SELECT * FROM subscription_plans ORDER BY sort_order")]}
+                    "settings":settings(con),"plans":[self._plan(r, con) for r in con.execute("SELECT * FROM subscription_plans ORDER BY sort_order")]}
 
     def purge_demo_data(self, actor, confirmation: str) -> dict:
         require_role(actor,"admin","super_admin")

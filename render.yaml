@@ -1,18 +1,32 @@
+previews:
+  generation: off
+
 services:
   - type: web
     name: bisa-api
     runtime: python
-    autoDeploy: false
-    buildCommand: pip install -r requirements.txt
+    # Free avoids creating a paid instance from this review-only blueprint.
+    # It has no durable storage, so production remains blocked until the owner
+    # explicitly approves a persistent-storage deployment design.
+    plan: free
+    autoDeployTrigger: off
+    buildCommand: python -m pip install -r requirements.txt && python scripts/verify_bisa.py
+    preDeployCommand: python scripts/check_production_readiness.py
     startCommand: python bisa_server.py
-    healthCheckPath: /healthz
+    healthCheckPath: /readyz
     envVars:
+      - key: HOST
+        value: 0.0.0.0
       - key: BISA_ENV
         value: production
       - key: BISA_RELEASE
-        value: 0.1.0
+        sync: false
       - key: BISA_SEED_SAMPLE_DATA
         value: false
+      - key: BISA_PHONE_VERIFICATION_MODE
+        value: invite_only
+      # These three values must point at owner-approved persistent BISA-only
+      # storage. This blueprint deliberately does not create a paid disk.
       - key: BISA_DB_PATH
         sync: false
       - key: BISA_UPLOAD_DIR
@@ -23,3 +37,14 @@ services:
         sync: false
       - key: BISA_ALLOWED_ORIGINS
         sync: false
+      - key: BISA_AUTH_PEPPER
+        generateValue: true
+      - key: BISA_MEDIA_SIGNING_KEY
+        generateValue: true
+      - key: BISA_PAYMENT_GATEWAY
+        value: unconfigured
+      # Web Push remains optional until owner-provided VAPID credentials are
+      # tested on real Android and iOS devices. Partial configuration fails
+      # the runtime readiness check.
+      - key: BISA_PUSH_REQUIRED
+        value: false
