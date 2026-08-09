@@ -42,10 +42,10 @@ def main() -> int:
             errors.append(f"mirror_mismatch:{left}:{right}")
 
     manifest = json.loads((ROOT / "manifest.webmanifest").read_text(encoding="utf-8"))
-    if manifest.get("name") != "BISA | بيسا" or not str(manifest.get("id", "")).startswith("/"):
+    if manifest.get("name") != "BISA | بيسا" or manifest.get("scope") != "./" or not str(manifest.get("id", "")).startswith("./"):
         errors.append("manifest_identity")
     worker = (ROOT / "service-worker.js").read_text(encoding="utf-8")
-    if "bisa-pwa-v0.1.0" not in worker or "/api/" not in worker:
+    if "bisa-pwa-v0.1.1-demo-catalog" not in worker or "api/" not in worker or "self.registration.scope" not in worker:
         errors.append("service_worker_policy")
     config = (ROOT / "bisa_config.py").read_text(encoding="utf-8")
     for token in ("om.bisa.marketplace", "PRODUCT_MIN_BAISA = 100", "PRODUCT_MAX_BAISA = 2000"):

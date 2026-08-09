@@ -1,8 +1,9 @@
-const CACHE = 'bisa-pwa-v0.1.0';
+const CACHE = 'bisa-pwa-v0.1.1-demo-catalog';
+const BASE = new URL('./', self.registration.scope).pathname;
 const PUBLIC_ASSETS = [
-  '/', '/index.html', '/manifest.webmanifest',
-  '/assets/styles/bisa.css', '/assets/scripts/bisa-app.js',
-  '/assets/brand/bisa-logo.svg', '/assets/brand/bisa-mark.svg'
+  BASE, `${BASE}index.html`, `${BASE}manifest.webmanifest`,
+  `${BASE}assets/styles/bisa.css`, `${BASE}assets/scripts/bisa-app.js`,
+  `${BASE}assets/brand/bisa-logo.svg`, `${BASE}assets/brand/bisa-mark.svg`
 ];
 
 self.addEventListener('install', event => {
@@ -17,11 +18,11 @@ self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  if (url.origin !== self.location.origin || url.pathname.startsWith(`${BASE}api/`)) return;
   if (request.mode === 'navigate') {
     event.respondWith(fetch(request).then(response => {
-      const copy = response.clone(); caches.open(CACHE).then(cache => cache.put('/index.html', copy)); return response;
-    }).catch(() => caches.match('/index.html')));
+      const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(`${BASE}index.html`, copy)); return response;
+    }).catch(() => caches.match(`${BASE}index.html`)));
     return;
   }
   event.respondWith(caches.match(request).then(hit => hit || fetch(request).then(response => {
@@ -32,7 +33,7 @@ self.addEventListener('fetch', event => {
 
 self.addEventListener('notificationclick', event => {
   event.notification.close();
-  const route = event.notification?.data?.route || '/';
+  const route = event.notification?.data?.route || BASE;
   event.waitUntil(clients.matchAll({type:'window', includeUncontrolled:true}).then(items => {
     const client = items[0];
     if (client) { client.postMessage({type:'bisa:notification', route}); return client.focus(); }

@@ -178,6 +178,8 @@ class BisaHandler(BaseHTTPRequestHandler):
                 result = SERVICE.decide_order(actor, str(payload.get("orderId") or ""), str(payload.get("decision") or ""))
             elif path == "/api/admin/merchant-application":
                 result = SERVICE.admin_decide_application(actor, payload)
+            elif path == "/api/admin/demo-data/purge":
+                result = SERVICE.purge_demo_data(actor, str(payload.get("confirmation") or ""))
             else:
                 raise DomainError("endpoint_not_found", 404)
             return self._send_json(200, {"ok": True, **(result if isinstance(result, dict) else {"data": result})})

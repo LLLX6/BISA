@@ -24,6 +24,9 @@ async function ready(){for(let i=0;i<80;i++){try{const r=await fetch(`http://127
     const consoleErrors=[]; page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text());});
     await page.goto(`http://127.0.0.1:${port}`,{waitUntil:'domcontentloaded',timeout:15000});
     await page.locator('.hero h1').waitFor();
+    if(await page.locator('.demo-ad').count()<1)throw new Error('demo_ad_missing');
+    if(await page.locator('.bundle-card').count()<1)throw new Error('demo_bundle_missing');
+    if(await page.locator('.store-card:not(.bundle-card)').count()<1)throw new Error('demo_store_missing');
     const fit=await page.evaluate(()=>({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth,dir:document.documentElement.dir}));
     if(fit.scroll>fit.client+1)throw new Error(`horizontal_overflow_${viewport.width}_${fit.scroll}`);
     if(fit.dir!=='rtl')throw new Error('rtl_not_default');
@@ -51,6 +54,11 @@ async function ready(){for(let i=0;i<80;i++){try{const r=await fetch(`http://127
   await page.locator('.product-card').first().waitFor();
   await page.locator('[data-add-product]').first().click(); await page.locator('[data-view="cart"]').click();
   if(await page.locator('.cart-item').count()<1)throw new Error('shopper_cart_flow_failed');
+  await page.locator('[data-view="home"]').click();
+  await page.locator('[data-add-bundle]').first().click();
+  if(await page.locator('#sheetRoot').isVisible())await page.locator('[data-confirm-replace]').click();
+  await page.locator('[data-view="cart"]').click();
+  if(await page.locator('.cart-item').count()<1)throw new Error('bundle_cart_flow_failed');
   await context.close(); await browser.close();
   console.log(JSON.stringify({ok:true,responsive:results,shopperFlow:true}));
 })().catch(error=>{console.error(error);process.exitCode=1;}).finally(()=>{server.kill('SIGTERM');setTimeout(()=>process.exit(process.exitCode||0),500);});
