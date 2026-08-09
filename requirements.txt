@@ -1,2 +1,5 @@
-# The BISA V1 API uses the Python standard library only.
-# Add integration SDKs only when the corresponding adapter is implemented and tested.
+# Server-side image decoding, EXIF normalization and bounded WebP output.
+Pillow==12.3.0
+# Standards-based Web Push with VAPID. The adapter remains disabled unless the
+# complete BISA_VAPID_* credential group is present and internally consistent.
+pywebpush==2.3.0

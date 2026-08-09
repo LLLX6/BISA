@@ -13,20 +13,54 @@ os.environ["BISA_DB_PATH"] = str(TEST_ROOT / "bisa-tests.sqlite3")
 os.environ["BISA_UPLOAD_DIR"] = str(TEST_ROOT / "uploads")
 os.environ["BISA_BACKUP_DIR"] = str(TEST_ROOT / "backups")
 os.environ["BISA_SEED_SAMPLE_DATA"] = "true"
+os.environ["BISA_DEMO_PIN"] = "1234"
 
-from bisa_config import DB_PATH  # noqa: E402
+import bisa_config  # noqa: E402
+import bisa_domain  # noqa: E402
 from bisa_domain import (  # noqa: E402
     BisaService, DomainError, authenticate, connect, init_db,
-    register_or_login, validate_product_price,
+    register_or_login, seed_demo, validate_product_price, verify_or_register_account,
 )
 
 
+DB_PATH = TEST_ROOT / "bisa-tests.sqlite3"
+ORIGINAL_PATHS = {
+    "data": bisa_config.DATA_DIR,
+    "db": bisa_config.DB_PATH,
+    "upload": bisa_config.UPLOAD_DIR,
+    "backup": bisa_config.BACKUP_DIR,
+    "domain_db": bisa_domain.DB_PATH,
+    "domain_seed": bisa_domain.SEED_SAMPLE_DATA,
+}
+
+
 class BisaDomainTests(unittest.TestCase):
+    def test_demo_seed_requires_an_explicit_local_pin(self):
+        current = os.environ.pop("BISA_DEMO_PIN", None)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "BISA_DEMO_PIN"):
+                seed_demo(None)
+        finally:
+            if current is not None:
+                os.environ["BISA_DEMO_PIN"] = current
+
     @classmethod
     def tearDownClass(cls):
+        bisa_config.DATA_DIR = ORIGINAL_PATHS["data"]
+        bisa_config.DB_PATH = ORIGINAL_PATHS["db"]
+        bisa_config.UPLOAD_DIR = ORIGINAL_PATHS["upload"]
+        bisa_config.BACKUP_DIR = ORIGINAL_PATHS["backup"]
+        bisa_domain.DB_PATH = ORIGINAL_PATHS["domain_db"]
+        bisa_domain.SEED_SAMPLE_DATA = ORIGINAL_PATHS["domain_seed"]
         shutil.rmtree(TEST_ROOT, ignore_errors=True)
 
     def setUp(self):
+        bisa_config.DATA_DIR = TEST_ROOT
+        bisa_config.DB_PATH = DB_PATH
+        bisa_config.UPLOAD_DIR = TEST_ROOT / "uploads"
+        bisa_config.BACKUP_DIR = TEST_ROOT / "backups"
+        bisa_domain.DB_PATH = DB_PATH
+        bisa_domain.SEED_SAMPLE_DATA = True
         for suffix in ("", "-wal", "-shm"):
             try:
                 Path(str(DB_PATH) + suffix).unlink()
@@ -47,6 +81,75 @@ class BisaDomainTests(unittest.TestCase):
         self.assertEqual(validate_product_price("2.000"), 2000)
         self.assertCode("product_price_out_of_range", lambda: validate_product_price("0.099"))
         self.assertCode("product_price_out_of_range", lambda: validate_product_price("2.001"))
+        self.assertCode("price_precision_invalid", lambda: validate_product_price("1.0004"))
+
+    def test_invite_only_mode_never_auto_claims_an_unverified_phone(self):
+        previous = bisa_config.PHONE_VERIFICATION_MODE
+        bisa_config.PHONE_VERIFICATION_MODE = "invite_only"
+        try:
+            self.assertCode(
+                "phone_verification_required",
+                lambda: verify_or_register_account("96891112222", "1234", "Unverified", "shopper"),
+            )
+        finally:
+            bisa_config.PHONE_VERIFICATION_MODE = previous
+
+    def test_database_rejects_cross_tenant_inventory_and_cart_rows(self):
+        with connect(immediate=True) as con:
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "product_branch_tenant_mismatch"):
+                con.execute(
+                    """INSERT INTO product_branch_inventory(
+                        product_id,branch_id,stock_mode,quantity,availability,
+                        last_stock_verified_at,stale_at,active,updated_at)
+                       VALUES('demo_product_muscat_1','demo_branch_seeb','tracked',1,
+                        'in_stock','','',1,'2026-08-09T00:00:00+00:00')"""
+                )
+            with self.assertRaisesRegex(sqlite3.IntegrityError, "cart_branch_tenant_mismatch"):
+                con.execute(
+                    """INSERT INTO carts(id,account_id,merchant_id,branch_id,status,version,updated_at)
+                       VALUES('cross_cart',?,'demo_merchant_muscat','demo_branch_seeb',
+                        'active',1,'2026-08-09T00:00:00+00:00')""",
+                    (self.shopper["accountId"],),
+                )
+
+    def test_merchant_cannot_update_another_merchants_product_by_id(self):
+        stamp = "2026-01-01T00:00:00+00:00"
+        with connect(immediate=True) as con:
+            con.execute("INSERT INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES(?,?,?,?,?,?)",
+                        ("acct_competitor", "96895555555", "Competitor", "hash", "active", stamp))
+            con.execute("INSERT INTO merchants(id,owner_account_id,name_ar,name_en,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                        ("merchant_competitor", "acct_competitor", "منافس", "Competitor", "approved", stamp, stamp))
+            con.execute("INSERT INTO store_branches(id,merchant_id,name_ar,name_en,wilayah_id,area_id,status,active,public_visible,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,1,?,?)",
+                        ("branch_competitor", "merchant_competitor", "فرع منافس", "Competitor branch", "wilayat_seeb", "demo_area_seeb", "approved", stamp, stamp))
+            con.execute("INSERT INTO merchant_subscriptions(id,merchant_id,plan_id,starts_at,ends_at,status,created_at) VALUES(?,?,?,?,?,'active',?)",
+                        ("sub_competitor", "merchant_competitor", "basic_3m", stamp, "2099-01-01T00:00:00+00:00", stamp))
+        actor = {"accountId":"acct_competitor","role":"merchant_owner","merchantId":"merchant_competitor","name":"Competitor"}
+        payload = {"id":"demo_product_seeb_1","branchId":"branch_competitor","categoryId":"toys",
+                   "nameAr":"تم الاستيلاء","nameEn":"Hijacked","price":"0.100","quantity":1}
+        self.assertCode("product_not_owned", lambda: self.service.upsert_product(actor, payload))
+        with connect() as con:
+            name = con.execute("SELECT name_en FROM products WHERE id='demo_product_seeb_1'").fetchone()["name_en"]
+            self.assertNotEqual(name, "Hijacked")
+
+    def test_same_merchant_different_branch_requires_explicit_cart_replacement(self):
+        self.service.add_cart(self.shopper, {"kind":"product","itemId":"demo_product_seeb_1","branchId":"demo_branch_seeb","quantity":1})
+        stamp = "2026-01-01T00:00:00+00:00"
+        with connect(immediate=True) as con:
+            con.execute("INSERT INTO store_branches(id,merchant_id,name_ar,name_en,wilayah_id,area_id,status,active,public_visible,created_at,updated_at) VALUES(?,?,?,?,?,?,?,1,1,?,?)",
+                        ("demo_branch_seeb_two", "demo_merchant_seeb", "فرع ثان", "Second branch", "wilayat_seeb", "demo_area_seeb", "approved", stamp, stamp))
+            con.execute("INSERT INTO product_branch_inventory(product_id,branch_id,stock_mode,quantity,availability,last_stock_verified_at,stale_at,active,updated_at) VALUES(?,?,'tracked',5,'in_stock',?,'',1,?)",
+                        ("demo_product_seeb_1", "demo_branch_seeb_two", stamp, stamp))
+        payload = {"kind":"product","itemId":"demo_product_seeb_1","branchId":"demo_branch_seeb_two","quantity":1}
+        self.assertCode("cross_store_cart_confirmation_required", lambda: self.service.add_cart(self.shopper, payload))
+        replaced = self.service.add_cart(self.shopper, {**payload, "replaceCart": True})
+        self.assertEqual(replaced["branch_id"], "demo_branch_seeb_two")
+
+    def test_disabling_merchant_role_invalidates_existing_session(self):
+        session = register_or_login("96892000003", "1234", "", "merchant_owner")
+        self.assertIsNotNone(authenticate(session["token"]))
+        with connect(immediate=True) as con:
+            con.execute("UPDATE account_roles SET active=0 WHERE account_id='demo_account_seeb' AND role='merchant_owner'")
+        self.assertIsNone(authenticate(session["token"]))
 
     def test_public_area_requires_approved_active_public_branch(self):
         with connect(immediate=True) as con:
@@ -77,11 +180,13 @@ class BisaDomainTests(unittest.TestCase):
         self.assertEqual(first["merchant_id"], "demo_merchant_seeb")
         with connect(immediate=True) as con:
             stamp = "2026-01-01T00:00:00+00:00"
-            con.execute("INSERT INTO accounts VALUES('acct_second','96890000003','Second','hash','active',?)", (stamp,))
+            con.execute("INSERT INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES('acct_second','96890000003','Second','hash','active',?)", (stamp,))
             con.execute("INSERT INTO merchants(id,owner_account_id,name_ar,name_en,status,created_at,updated_at) VALUES('merchant_second','acct_second','متجر ثان','Second Store','approved',?,?)", (stamp,stamp))
             con.execute("INSERT INTO store_branches(id,merchant_id,name_ar,name_en,wilayah_id,area_id,status,active,public_visible,created_at,updated_at) VALUES('branch_second','merchant_second','ثان','Second','wilayat_seeb','demo_area_seeb','approved',1,1,?,?)", (stamp,stamp))
             con.execute("INSERT INTO products(id,merchant_id,category_id,name_ar,name_en,price_baisa,status,active,created_at,updated_at) VALUES('prod_second','merchant_second','toys','لعبة','Toy',100,'approved',1,?,?)", (stamp,stamp))
-            con.execute("INSERT INTO product_branch_inventory VALUES('prod_second','branch_second','tracked',5,'in_stock',?,'',1,?)", (stamp,stamp))
+            con.execute("""INSERT INTO product_branch_inventory
+                (product_id,branch_id,stock_mode,quantity,availability,last_stock_verified_at,stale_at,active,updated_at)
+                VALUES('prod_second','branch_second','tracked',5,'in_stock',?,'',1,?)""", (stamp,stamp))
         payload={"kind":"product","itemId":"prod_second","branchId":"branch_second","quantity":1}
         self.assertCode("cross_store_cart_confirmation_required", lambda: self.service.add_cart(self.shopper,payload))
         replaced=self.service.add_cart(self.shopper,{**payload,"replaceCart":True})
@@ -154,7 +259,7 @@ class BisaDomainTests(unittest.TestCase):
         application=self.service.merchant_apply(new_actor,{"nameAr":"متجر يعتمد","nameEn":"Approved Store","wilayahId":"wilayat_seeb","areaId":"demo_area_seeb"})
         with connect(immediate=True) as con:
             admin_id="acct_admin_test"
-            con.execute("INSERT INTO accounts VALUES(?,?,?,?,?,?)",(admin_id,"96893333333","Admin","hash","active","2026-01-01T00:00:00+00:00"))
+            con.execute("INSERT INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES(?,?,?,?,?,?)",(admin_id,"96893333333","Admin","hash","active","2026-01-01T00:00:00+00:00"))
             con.execute("INSERT INTO account_roles VALUES(?,?, '',1)",(admin_id,"admin"))
         admin={"accountId":admin_id,"role":"admin","merchantId":"","name":"Admin"}
         result=self.service.admin_decide_application(admin,{"applicationId":application["id"],"decision":"approve"})
@@ -181,7 +286,7 @@ class BisaDomainTests(unittest.TestCase):
     def test_admin_can_purge_only_tagged_demo_data_with_exact_confirmation(self):
         with connect(immediate=True) as con:
             stamp = "2026-01-01T00:00:00+00:00"
-            con.execute("INSERT INTO accounts VALUES(?,?,?,?,?,?)",("acct_demo_purge_admin","96898888888","Purge Admin","hash","active",stamp))
+            con.execute("INSERT INTO accounts(id,phone,name,pin_hash,status,created_at) VALUES(?,?,?,?,?,?)",("acct_demo_purge_admin","96898888888","Purge Admin","hash","active",stamp))
             con.execute("INSERT INTO account_roles VALUES(?,?, '',1)",("acct_demo_purge_admin","admin"))
         admin={"accountId":"acct_demo_purge_admin","role":"admin","merchantId":"","name":"Purge Admin"}
         self.assertCode("demo_delete_confirmation_required",lambda:self.service.purge_demo_data(admin,"DELETE DEMO"))

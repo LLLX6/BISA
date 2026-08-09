@@ -9,34 +9,66 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: bisa-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BISA_ENV: test
+  BISA_PHONE_VERIFICATION_MODE: development_bypass
+  BISA_SEED_SAMPLE_DATA: "false"
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
   python:
+    name: Domain, API, security and release tools
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: python -m py_compile bisa_config.py bisa_domain.py bisa_server.py scripts/create_bisa_admin.py tests/test_bisa_domain.py scripts/verify_bisa.py
-      - run: python -m unittest tests.test_bisa_domain -v
-      - run: python scripts/verify_bisa.py
+          cache: pip
+      - name: Install BISA Python dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile BISA Python
+        run: >-
+          python -m py_compile
+          bisa_application.py bisa_config.py bisa_domain.py bisa_integrations.py
+          bisa_jobs.py bisa_marketplace.py bisa_merchant_launch.py bisa_migrations.py
+          bisa_moderation.py bisa_operations.py bisa_push.py bisa_security.py
+          bisa_server.py bisa_supplier.py
+          scripts/audit_database.py scripts/backup_sqlite.py scripts/check_production_readiness.py
+          scripts/create_bisa_admin.py scripts/restore_sqlite_backup.py
+          scripts/verify_bisa.py scripts/verify_repository.py tests/test_bisa*.py
+      - name: Run BISA unit and API suite
+        run: python -m unittest discover -s tests -p "test_bisa*.py" -v
+      - name: Verify release repository
+        run: python scripts/verify_bisa.py
+      - name: Check patch whitespace
+        run: git diff --check
 
   browser:
+    name: Responsive RTL/LTR PWA
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
+      - name: Install BISA Python dependencies
+        run: python -m pip install -r requirements.txt
       - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
       - run: npm ci
       - run: npm audit --audit-level=high
       - run: npx playwright install --with-deps chromium
       - run: npm run check:js
+      - run: npm run test:map
       - run: npm run test:ui
       - run: npm run test:performance
